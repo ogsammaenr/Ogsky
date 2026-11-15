@@ -13,7 +13,10 @@ import me.ogsammaenr.ogsky.core.api.gui.GuiService;
 import me.ogsammaenr.ogsky.core.api.island.IslandOperationResult;
 import me.ogsammaenr.ogsky.core.api.island.IslandService;
 import me.ogsammaenr.ogsky.core.api.island.IslandView;
+import me.ogsammaenr.ogsky.core.api.scan.IslandScanService;
 import me.ogsammaenr.ogsky.core.api.service.ServiceRegistry;
+import me.ogsammaenr.ogsky.core.api.event.IslandDeletedEvent;
+import me.ogsammaenr.ogsky.core.api.event.IslandResetEvent;
 import me.ogsammaenr.ogsky.core.internal.action.SimpleIslandActionRegistry;
 import me.ogsammaenr.ogsky.core.internal.blueprint.CoreBlueprintService;
 import me.ogsammaenr.ogsky.core.internal.command.SimpleIslandCommandRegistry;
@@ -32,6 +35,7 @@ import me.ogsammaenr.ogsky.core.internal.island.TeamService;
 import me.ogsammaenr.ogsky.core.internal.permission.LuckPermsPermissionBridge;
 import me.ogsammaenr.ogsky.core.internal.protection.ProtectionListeners;
 import me.ogsammaenr.ogsky.core.internal.protection.ProtectionResolver;
+import me.ogsammaenr.ogsky.core.internal.scan.CoreIslandScanService;
 import me.ogsammaenr.ogsky.core.internal.service.SimpleServiceRegistry;
 import me.ogsammaenr.ogsky.core.internal.world.OgskyDimensions;
 import me.ogsammaenr.ogsky.core.internal.world.PortalRouter;
@@ -67,6 +71,7 @@ public final class OgskyCoreApiImpl implements OgskyCoreApi {
 	private final LuckPermsPermissionBridge permissionBridge;
 	private final ProtectionResolver protectionResolver;
 	private final ProtectionListeners protectionListeners;
+	private final CoreIslandScanService scanService;
 
 	public OgskyCoreApiImpl() {
 		this(CoreConfig.defaults());
@@ -111,6 +116,13 @@ public final class OgskyCoreApiImpl implements OgskyCoreApi {
 			this.protectionResolver,
 			this.eventBus
 		);
+		this.scanService = new CoreIslandScanService(this.islandService);
+		this.eventBus.subscribe(IslandDeletedEvent.class, e -> this.scanService.cancelScansForIsland(e.islandId()));
+		this.eventBus.subscribe(IslandResetEvent.class, e -> {
+			if (!e.isCancelled()) {
+				this.scanService.cancelScansForIsland(e.islandId());
+			}
+		});
 	}
 
 	@Override
@@ -192,6 +204,15 @@ public final class OgskyCoreApiImpl implements OgskyCoreApi {
 	@Override
 	public GuiService guis() {
 		return guiService;
+	}
+
+	@Override
+	public IslandScanService scans() {
+		return scanService;
+	}
+
+	public CoreIslandScanService scanService() {
+		return scanService;
 	}
 
 	public ProtectionResolver protection() {

@@ -175,6 +175,13 @@ public final class CoreIslandService implements IslandService {
 	}
 
 	@Override
+	public List<IslandView> allIslands() {
+		return grid.allIslands().stream()
+			.map(IslandView.class::cast)
+			.toList();
+	}
+
+	@Override
 	public int lockedCellSize() {
 		return grid.cellSize();
 	}

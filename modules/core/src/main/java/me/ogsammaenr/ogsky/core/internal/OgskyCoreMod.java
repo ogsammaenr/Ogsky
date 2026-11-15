@@ -88,9 +88,13 @@ public final class OgskyCoreMod implements ModInitializer {
 			);
 		});
 
-		ServerTickEvents.END_SERVER_TICK.register(server -> api.blueprints().tick(server));
+		ServerTickEvents.END_SERVER_TICK.register(server -> {
+			api.blueprints().tick(server);
+			api.scanService().tick(server);
+		});
 
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+			api.scanService().cancelAll();
 			api.blueprints().onServerStopping();
 			api.team().clearPendingInvites();
 		});

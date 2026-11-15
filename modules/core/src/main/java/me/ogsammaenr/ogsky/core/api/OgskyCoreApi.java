@@ -8,6 +8,7 @@ import me.ogsammaenr.ogsky.core.api.flag.FlagRegistry;
 import me.ogsammaenr.ogsky.core.api.gui.GuiService;
 import me.ogsammaenr.ogsky.core.api.island.IslandService;
 import me.ogsammaenr.ogsky.core.api.permission.PermissionService;
+import me.ogsammaenr.ogsky.core.api.scan.IslandScanService;
 import me.ogsammaenr.ogsky.core.api.service.ServiceRegistry;
 
 /**
@@ -31,4 +32,6 @@ public interface OgskyCoreApi {
 	PermissionService permissions();
 
 	GuiService guis();
+
+	IslandScanService scans();
 }

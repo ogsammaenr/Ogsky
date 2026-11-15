@@ -165,4 +165,6 @@ public interface IslandService {
 		UUID islandId,
 		boolean bypassRole
 	);
+
+	List<IslandView> allIslands();
 }
