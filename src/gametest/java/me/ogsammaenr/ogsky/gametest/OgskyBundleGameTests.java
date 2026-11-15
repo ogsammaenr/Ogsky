@@ -2,6 +2,8 @@ package me.ogsammaenr.ogsky.gametest;
 
 import com.mojang.authlib.GameProfile;
 import io.netty.channel.embedded.EmbeddedChannel;
+import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import me.ogsammaenr.ogsky.core.api.OgskyCore;
 import me.ogsammaenr.ogsky.core.api.OgskyCoreApi;
 import me.ogsammaenr.ogsky.core.api.db.ModuleDatabase;
@@ -34,11 +36,23 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.Vec3i;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.network.Connection;
+import net.minecraft.network.HashedStack;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
+import net.minecraft.network.protocol.game.ClientboundContainerSetContentPacket;
+import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
+import net.minecraft.network.protocol.game.ClientboundSetCursorItemPacket;
+import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
+import net.minecraft.network.protocol.game.ClientboundSetPlayerInventoryPacket;
+import net.minecraft.network.protocol.game.ServerboundContainerClickPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
+import net.minecraft.network.protocol.game.ServerboundSetCreativeModeSlotPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
@@ -51,8 +65,14 @@ import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.item.PrimedTnt;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.inventory.ChestMenu;
+import net.minecraft.world.inventory.ContainerInput;
+import net.minecraft.world.inventory.InventoryMenu;
+import net.minecraft.world.item.DyeColor;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.level.Explosion;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.ServerExplosion;
@@ -60,8 +80,13 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.EndPortalBlock;
 import net.minecraft.world.level.block.LeavesBlock;
 import net.minecraft.world.level.block.NetherPortalBlock;
-import net.minecraft.world.level.block.piston.PistonBaseBlock;
+import net.minecraft.world.level.block.StandingSignBlock;
+import net.minecraft.world.level.block.WallSignBlock;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.world.level.block.entity.SignText;
+import net.minecraft.world.level.block.entity.SignTextSlot;
+import net.minecraft.world.level.block.piston.PistonBaseBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.PistonType;
 import net.minecraft.world.level.gamerules.GameRules;
@@ -82,6 +107,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 /**
@@ -130,6 +156,51 @@ public final class OgskyBundleGameTests {
 			helper.assertTrue(
 				api.actions().find(OgskyCore.id("island_level")).isPresent(),
 				"Expected ogsky:island_level action to be registered when ogsky-level is loaded"
+			);
+		}
+
+		for (String coreAction : List.of(
+			"island_home",
+			"island_home_nether",
+			"island_home_end",
+			"island_sethome",
+			"island_toggle_lock"
+		)) {
+			helper.assertTrue(
+				api.actions().find(OgskyCore.id(coreAction)).isPresent(),
+				"Expected built-in core action " + coreAction
+			);
+		}
+
+		if (FabricLoader.getInstance().isModLoaded("ogsky-panel")) {
+			ModuleDatabase panelDb = api.databases().require("panel");
+			helper.assertTrue(Files.exists(panelDb.databasePath()), "Expected panel.db when ogsky-panel is bundled");
+			Set<String> panelCols = panelDb.queryBlocking(conn -> {
+				Set<String> cols = new HashSet<>();
+				try (Statement stmt = conn.createStatement();
+					 ResultSet rs = stmt.executeQuery("PRAGMA table_info(panel_preferences)")) {
+					while (rs.next()) {
+						cols.add(rs.getString("name"));
+					}
+				}
+				return cols;
+			});
+			for (String expectedCol : Set.of("player_uuid", "ui_mode", "preferred_tab", "flag_mode", "updated_at")) {
+				helper.assertTrue(panelCols.contains(expectedCol), "Expected column '" + expectedCol + "' in panel_preferences v2");
+			}
+			helper.assertTrue(
+				api.commands().subcommands().stream().anyMatch(s -> s.name().equals("panel")),
+				"Expected /is panel subcommand when ogsky-panel is loaded"
+			);
+			helper.assertTrue(
+				api.commands().subcommands().stream().anyMatch(s -> s.name().equals("settings")),
+				"Expected /is settings subcommand when ogsky-panel is loaded"
+			);
+		} else {
+			helper.assertTrue(api.databases().find("panel").isEmpty(), "Panel DB should not exist when ogsky-panel is absent");
+			helper.assertTrue(
+				api.commands().subcommands().stream().noneMatch(s -> s.name().equals("panel")),
+				"Panel subcommand should not be registered when ogsky-panel is absent"
 			);
 		}
 
@@ -489,6 +560,206 @@ public final class OgskyBundleGameTests {
 	}
 
 	@GameTest
+	public void blueprintBedrockAnchorSpawnAndWelcomeSignsWork(GameTestHelper helper) throws Exception {
+		MinecraftServer server = helper.getLevel().getServer();
+		ServerLevel overworld = server.getLevel(OgskyDimensions.OVERWORLD);
+		helper.assertTrue(overworld != null, "Expected ogsky:overworld dimension");
+
+		OgskyCoreApiImpl coreApi = (OgskyCoreApiImpl) OgskyCore.api();
+		CoreIslandService islands = coreApi.coreIslands();
+
+		Path tempBlueprints = Files.createTempDirectory("ogsky-bp-anchor-gametest");
+		Path bundleDir = tempBlueprints.resolve("anchor_starter");
+		Files.createDirectories(bundleDir);
+
+		long cell = islands.grid().allocateNextCell();
+		int gridX = PackedGridMap.unpackX(cell);
+		int gridZ = PackedGridMap.unpackZ(cell);
+		int centerX = islands.grid().centerCoordinate(gridX);
+		int centerZ = islands.grid().centerCoordinate(gridZ);
+
+		CoreConfig testConfig = CoreConfig.defaults();
+		testConfig.blueprints.defaultBundle = "anchor_starter";
+		testConfig.blueprints.blocksPerTick = 128;
+		testConfig.blueprints.maxNanosPerTick = 50_000_000L;
+		testConfig.blueprints.cleanupChunksPerTick = 16;
+		testConfig.blueprints.welcomeSignLines = List.of(
+			"&aHos Geldin,",
+			"&f{player}",
+			"&7Ada: {bundle}",
+			"&eIyi oyunlar!"
+		);
+
+		UUID ownerId = UUID.randomUUID();
+		Island island = new Island(
+			UUID.randomUUID(),
+			ownerId,
+			gridX,
+			gridZ,
+			centerX,
+			centerZ,
+			(short) testConfig.island.initialHalfSize,
+			"anchor_starter",
+			Instant.now(),
+			coreApi.flags(),
+			testConfig
+		);
+		islands.grid().register(island);
+
+		CoreBlueprintService testBlueprints = new CoreBlueprintService(
+			testConfig,
+			tempBlueprints,
+			islands,
+			coreApi.databases(),
+			coreApi.events()
+		);
+
+		BlockPos scratchOrigin = new BlockPos(centerX + 5120, 120, centerZ + 5120);
+		ServerPlayer ownerPlayer = null;
+		try {
+			for (int dx = 0; dx < 5; dx++) {
+				for (int dz = 0; dz < 5; dz++) {
+					overworld.setBlock(scratchOrigin.offset(dx, 0, dz), Blocks.DIRT.defaultBlockState(), 18);
+					overworld.setBlock(scratchOrigin.offset(dx, 1, dz), Blocks.GRASS_BLOCK.defaultBlockState(), 18);
+					overworld.setBlock(scratchOrigin.offset(dx, 2, dz), Blocks.AIR.defaultBlockState(), 18);
+				}
+			}
+			// Asymmetric bedrock anchor at relative (1, 1, 3)
+			overworld.setBlock(scratchOrigin.offset(1, 1, 3), Blocks.BEDROCK.defaultBlockState(), 18);
+
+			// Standing [SPAWN] sign at relative (3, 2, 1), rotation=12 (front facing EAST / yaw=-90)
+			BlockPos scratchSpawnSign = scratchOrigin.offset(3, 2, 1);
+			overworld.setBlock(
+				scratchSpawnSign,
+				Blocks.OAK_SIGN.defaultBlockState().setValue(StandingSignBlock.ROTATION, 12),
+				18
+			);
+			if (overworld.getBlockEntity(scratchSpawnSign) instanceof SignBlockEntity spawnSign) {
+				SignText front = spawnSign.getText(SignTextSlot.FRONT).asMutable()
+					.setLine(0, Component.literal("[SPAWN]"))
+					.asImmutable();
+				spawnSign.setText(front, SignTextSlot.FRONT);
+			}
+
+			// Oak planks support + glowing CYAN [WELCOME] wall sign at relative (1, 2, 2)
+			overworld.setBlock(scratchOrigin.offset(0, 2, 2), Blocks.OAK_PLANKS.defaultBlockState(), 18);
+			BlockPos scratchWelcomeSign = scratchOrigin.offset(1, 2, 2);
+			overworld.setBlock(
+				scratchWelcomeSign,
+				Blocks.OAK_WALL_SIGN.defaultBlockState().setValue(WallSignBlock.FACING, Direction.EAST),
+				18
+			);
+			if (overworld.getBlockEntity(scratchWelcomeSign) instanceof SignBlockEntity welcomeSign) {
+				SignText front = welcomeSign.getText(SignTextSlot.FRONT).asMutable()
+					.setColor(DyeColor.CYAN)
+					.setTextGlowing(true)
+					.setLine(0, Component.literal("[WELCOME]"))
+					.asImmutable();
+				welcomeSign.setText(front, SignTextSlot.FRONT);
+			}
+
+			StructureTemplate captured = new StructureTemplate();
+			captured.fillFromWorld(overworld, scratchOrigin, new Vec3i(5, 4, 5), false, List.of());
+			Path nbtPath = bundleDir.resolve("overworld.nbt");
+			NbtIo.writeCompressed(captured.save(new CompoundTag()), nbtPath);
+
+			// Clear scratch zone
+			for (int dx = 0; dx < 5; dx++) {
+				for (int dy = 0; dy < 4; dy++) {
+					for (int dz = 0; dz < 5; dz++) {
+						overworld.removeBlockEntity(scratchOrigin.offset(dx, dy, dz));
+						overworld.setBlock(scratchOrigin.offset(dx, dy, dz), Blocks.AIR.defaultBlockState(), 818);
+					}
+				}
+			}
+
+			testBlueprints.onServerStarting(server);
+			helper.assertTrue(
+				testBlueprints.registry().find("anchor_starter").map(b -> b.hasOverworld()).orElse(false),
+				"Expected anchor_starter compressed at server startup"
+			);
+
+			// Remove .nbt file on disk after startup compression to prove pasting reads exclusively from compressed RAM object.
+			Files.deleteIfExists(nbtPath);
+
+			ownerPlayer = createOnlineMockPlayer(server, overworld, ownerId, "BpOwner", GameType.SURVIVAL);
+			boolean queued = testBlueprints.enqueueOverworldPaste(server, island, "anchor_starter", ownerPlayer.getScoreboardName(), null);
+			helper.assertTrue(queued, "Expected enqueueOverworldPaste from compressed RAM blueprint to succeed");
+
+			for (int t = 0; t < 16 && testBlueprints.paster().activeJobCount() > 0; t++) {
+				testBlueprints.tick(server);
+			}
+			helper.assertTrue(testBlueprints.paster().activeJobCount() == 0 && island.isOverworldReady(), "Expected anchored paste completion");
+
+			int defaultSpawnY = testConfig.island.defaultSpawnY;
+			// Bedrock at relative (1, 1, 3) -> world (centerX, defaultSpawnY, centerZ)
+			BlockPos bedrockWorldPos = new BlockPos(centerX, defaultSpawnY, centerZ);
+			helper.assertTrue(
+				overworld.getBlockState(bedrockWorldPos).is(Blocks.BEDROCK),
+				"Expected bedrock from blueprint centered at exact island center (" + bedrockWorldPos + ")"
+			);
+
+			// origin = (centerX - 1, defaultSpawnY - 1, centerZ - 3)
+			// [SPAWN] sign at relative (3, 2, 1) -> world (centerX + 2, defaultSpawnY + 1, centerZ - 2)
+			BlockPos spawnWorldPos = new BlockPos(centerX + 2, defaultSpawnY + 1, centerZ - 2);
+			helper.assertTrue(
+				overworld.getBlockState(spawnWorldPos).isAir(),
+				"[SPAWN] sign must not be pasted into the island"
+			);
+			helper.assertTrue(
+				overworld.getBlockEntity(spawnWorldPos) == null,
+				"[SPAWN] sign must not create a BlockEntity in the world"
+			);
+			helper.assertTrue(
+				island.overworldSpawn().blockX(centerX) == spawnWorldPos.getX()
+					&& island.overworldSpawn().blockY() == spawnWorldPos.getY()
+					&& island.overworldSpawn().blockZ(centerZ) == spawnWorldPos.getZ()
+					&& Math.abs(island.overworldSpawn().yaw() - (-90.0F)) < 2.0F,
+				"Expected island overworld spawnpoint to match removed [SPAWN] sign with front-facing yaw (-90 East), got yaw="
+					+ island.overworldSpawn().yaw()
+			);
+
+			coreApi.lifecycle().teleportHome(server, ownerPlayer, island, OgskyDimensions.OVERWORLD);
+			helper.assertTrue(
+				Math.abs(ownerPlayer.getX() - (spawnWorldPos.getX() + 0.5D)) < 0.01D
+					&& Math.abs(ownerPlayer.getY() - spawnWorldPos.getY()) < 0.01D
+					&& Math.abs(ownerPlayer.getZ() - (spawnWorldPos.getZ() + 0.5D)) < 0.01D
+					&& Math.abs(ownerPlayer.getYRot() - (-90.0F)) < 2.0F,
+				"Expected teleportHome to place player at [SPAWN] position facing sign front face"
+			);
+
+			// [WELCOME] wall sign at relative (1, 2, 2) -> world (centerX, defaultSpawnY + 1, centerZ - 1)
+			BlockPos welcomeWorldPos = new BlockPos(centerX, defaultSpawnY + 1, centerZ - 1);
+			helper.assertTrue(
+				overworld.getBlockEntity(welcomeWorldPos) instanceof SignBlockEntity,
+				"Expected [WELCOME] sign pasted at relative (1, 2, 2)"
+			);
+			SignBlockEntity pastedWelcome = (SignBlockEntity) overworld.getBlockEntity(welcomeWorldPos);
+			SignText frontText = pastedWelcome.getText(SignTextSlot.FRONT);
+			helper.assertTrue(frontText.getColor() == DyeColor.CYAN, "Expected [WELCOME] sign dye color preserved");
+			helper.assertTrue(frontText.hasGlowingText(), "Expected [WELCOME] sign glowing text preserved");
+			List<Component> lines = frontText.getMessages(false);
+			helper.assertTrue(lines.get(0).getString().equals("§aHos Geldin,"), "Expected line 0 rendered, got: " + lines.get(0).getString());
+			helper.assertTrue(lines.get(1).getString().equals("§fBpOwner"), "Expected {player} substituted, got: " + lines.get(1).getString());
+			helper.assertTrue(lines.get(2).getString().equals("§7Ada: Anchor_starter"), "Expected {bundle} substituted, got: " + lines.get(2).getString());
+			helper.assertTrue(lines.get(3).getString().equals("§eIyi oyunlar!"), "Expected line 3 rendered, got: " + lines.get(3).getString());
+
+			testBlueprints.cleanupQueue().enqueue(gridX, gridZ, island.minX(), island.maxX(), island.minZ(), island.maxZ());
+			for (int t = 0; t < 32 && !islands.grid().pendingCleanups().isEmpty(); t++) {
+				testBlueprints.tick(server);
+			}
+		} finally {
+			if (ownerPlayer != null) {
+				server.getPlayerList().remove(ownerPlayer);
+			}
+			cleanupTestIsland(coreApi, islands, island.islandId(), gridX, gridZ);
+			deleteDirectoryRecursively(tempBlueprints);
+		}
+
+		helper.succeed();
+	}
+
+	@GameTest
 	public void islandLifecycleAndTeamOperationsWork(GameTestHelper helper) throws Exception {
 		MinecraftServer server = helper.getLevel().getServer();
 		ServerLevel overworld = server.getLevel(OgskyDimensions.OVERWORLD);
@@ -621,6 +892,7 @@ public final class OgskyBundleGameTests {
 		ServerPlayer owner = createOnlineMockPlayer(server, ogOverworld, ownerId, "ogsky_owner", GameType.SURVIVAL);
 		ServerPlayer visitor = createOnlineMockPlayer(server, ogOverworld, visitorId, "ogsky_visitor", GameType.SURVIVAL);
 		Island createdIsland = null;
+		Island visitorIsland = null;
 		int gridX = 0;
 		int gridZ = 0;
 
@@ -769,13 +1041,49 @@ public final class OgskyBundleGameTests {
 				"Disabling admin bypass should re-enforce hopper protection"
 			);
 
-			// Boundary enter event + /is lock eviction + exit event
+			// Boundary enter event + /is lock eviction when already inside + exit event
 			ServerTickEvents.END_SERVER_TICK.invoker().onEndTick(server);
 			helper.assertTrue(enteredIslands.contains(createdIsland.islandId()), "Expected IslandEnterEvent on entering island");
 			server.getCommands().performPrefixedCommand(owner.createCommandSourceStack(), "/is lock true");
 			ServerTickEvents.END_SERVER_TICK.invoker().onEndTick(server);
 			helper.assertTrue(!createdIsland.contains(visitor.getBlockX(), visitor.getBlockZ()) || visitor.level() != ogOverworld, "Expected locked island to evict visitor");
 			helper.assertTrue(exitedIslands.contains(createdIsland.islandId()), "Expected IslandExitEvent after eviction");
+
+			// External approach to locked island: create a second island for visitor first, then walk across owner's border from outside
+			server.getCommands().performPrefixedCommand(visitor.createCommandSourceStack(), "/is create test_cmd");
+			visitorIsland = islands.grid().findPrimaryIsland(visitorId).orElse(null);
+			helper.assertTrue(visitorIsland != null, "Expected visitor primary island for pushback vs home verification");
+			for (int t = 0; t < 16 && visitorIsland.isPasting(); t++) {
+				coreApi.blueprints().tick(server);
+			}
+			double outsideX = createdIsland.minX() - 0.8D;
+			visitor.teleport(new TeleportTransition(ogOverworld, new Vec3(outsideX, cy + 1.0D, cz + 0.5D), Vec3.ZERO, 0.0F, 0.0F, TeleportTransition.DO_NOTHING));
+			ServerTickEvents.END_SERVER_TICK.invoker().onEndTick(server); // records lastOutsidePos
+			visitor.teleport(new TeleportTransition(ogOverworld, new Vec3(createdIsland.minX() + 0.4D, cy + 1.0D, cz + 0.5D), Vec3.ZERO, 0.0F, 0.0F, TeleportTransition.DO_NOTHING));
+			ServerTickEvents.END_SERVER_TICK.invoker().onEndTick(server); // triggers boundary pushback
+			helper.assertTrue(
+				!createdIsland.contains(visitor.getBlockX(), visitor.getBlockZ()),
+				"Expected external approach to push visitor outside locked island boundary"
+			);
+			helper.assertTrue(
+				!visitorIsland.contains(visitor.getBlockX(), visitor.getBlockZ())
+					&& Math.abs(visitor.getX() - outsideX) < 3.0D,
+				"Expected boundary pushback to keep visitor near approached border rather than teleporting to visitor's own island"
+			);
+			helper.assertTrue(
+				visitor.getDeltaMovement().x < 0.0D,
+				"Expected outward West knockback when stopped at West border, got " + visitor.getDeltaMovement()
+			);
+			// Clean up visitor's secondary test island cleanly before continuing
+			int visGridX = visitorIsland.gridX();
+			int visGridZ = visitorIsland.gridZ();
+			UUID visIslandId = visitorIsland.islandId();
+			coreApi.lifecycle().deleteIsland(server, visIslandId, visitorId, IslandPreDeleteEvent.DeleteReason.ADMIN);
+			for (int t = 0; t < 512 && !islands.grid().pendingCleanups().isEmpty(); t++) {
+				coreApi.blueprints().tick(server);
+			}
+			cleanupTestIsland(coreApi, islands, visIslandId, visGridX, visGridZ);
+			visitorIsland = null;
 
 			// Void rescue
 			server.getCommands().performPrefixedCommand(owner.createCommandSourceStack(), "/is flag pvp_overworld false");
@@ -800,6 +1108,9 @@ public final class OgskyBundleGameTests {
 			server.getPlayerList().remove(visitor);
 			coreApi.protectionListeners().onPlayerDisconnect(ownerId);
 			coreApi.protectionListeners().onPlayerDisconnect(visitorId);
+			if (visitorIsland != null) {
+				cleanupTestIsland(coreApi, islands, visitorIsland.islandId(), visitorIsland.gridX(), visitorIsland.gridZ());
+			}
 			if (createdIsland != null) {
 				cleanupTestIsland(coreApi, islands, createdIsland.islandId(), gridX, gridZ);
 				clearBlockPosIfLoaded(ogOverworld, new BlockPos(createdIsland.centerX(), coreApi.coreIslands().config().island.defaultSpawnY, createdIsland.centerZ()));
@@ -957,6 +1268,509 @@ public final class OgskyBundleGameTests {
 		helper.succeed();
 	}
 
+	@GameTest
+	public void panelCommandsChestMenuExploitsAndLiveRefreshWork(GameTestHelper helper) throws Exception {
+		if (!FabricLoader.getInstance().isModLoaded("ogsky-panel")) {
+			helper.succeed();
+			return;
+		}
+
+		MinecraftServer server = helper.getLevel().getServer();
+		ServerLevel ogOverworld = server.getLevel(OgskyDimensions.OVERWORLD);
+		helper.assertTrue(ogOverworld != null, "Expected ogsky:overworld dimension");
+
+		OgskyCoreApiImpl coreApi = (OgskyCoreApiImpl) OgskyCore.api();
+		CoreIslandService islands = coreApi.coreIslands();
+		Path blueprintsRoot = coreApi.blueprints().registry().blueprintsDir();
+		Path bundleTestDir = blueprintsRoot.resolve("panel_test");
+		Path bundleAltDir = blueprintsRoot.resolve("panel_alt");
+
+		UUID ownerId = UUID.randomUUID();
+		UUID memberId = UUID.randomUUID();
+		UUID bannedId = UUID.randomUUID();
+		ServerPlayer owner = createOnlineMockPlayer(server, ogOverworld, ownerId, "PanelOwner", GameType.SURVIVAL);
+		ServerPlayer member = createOnlineMockPlayer(server, ogOverworld, memberId, "PanelMember", GameType.SURVIVAL);
+		owner.getInventory().setItem(0, new ItemStack(Items.DIAMOND, 3));
+		owner.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(Items.SHIELD, 1));
+
+		AtomicReference<UUID> createdIslandId = new AtomicReference<>();
+		Runnable cleanup = () -> {
+			try {
+				owner.closeContainer();
+				member.closeContainer();
+			} catch (Exception ignored) {
+			}
+			UUID islandId = createdIslandId.get();
+			if (islandId != null) {
+				islands.grid().findById(islandId).ifPresent(found -> {
+					int gx = found.gridX();
+					int gz = found.gridZ();
+					coreApi.lifecycle().deleteIsland(server, islandId, ownerId, IslandPreDeleteEvent.DeleteReason.ADMIN);
+					for (int t = 0; t < 64 && !islands.grid().pendingCleanups().isEmpty(); t++) {
+						coreApi.blueprints().tick(server);
+					}
+					cleanupTestIsland(coreApi, islands, islandId, gx, gz);
+				});
+			}
+			deleteDirectoryRecursively(bundleTestDir);
+			deleteDirectoryRecursively(bundleAltDir);
+			coreApi.blueprints().registry().reload();
+			server.getPlayerList().remove(owner);
+			server.getPlayerList().remove(member);
+		};
+
+		try {
+			synthesizeSimpleBlueprintBundle(ogOverworld, bundleTestDir, "panel_test", "Panel Test", 1);
+			synthesizeSimpleBlueprintBundle(ogOverworld, bundleAltDir, "panel_alt", "Panel Alt", 2);
+			coreApi.blueprints().registry().reload();
+			helper.assertTrue(coreApi.blueprints().registry().find("panel_test").isPresent(), "Expected panel_test blueprint");
+			helper.assertTrue(coreApi.blueprints().registry().find("panel_alt").isPresent(), "Expected panel_alt blueprint");
+
+			// Step 1: Islandless /is panel asynchronously loads panel.db preferences and opens Blueprints & Info tab
+			server.getCommands().performPrefixedCommand(owner.createCommandSourceStack(), "is panel");
+
+			helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(
+					owner.containerMenu instanceof ChestMenu,
+					"Expected async /is panel execution to open a server ChestMenu"
+				))
+				.thenExecute(guarded(cleanup, () -> {
+					ChestMenu menu = (ChestMenu) owner.containerMenu;
+					helper.assertTrue(
+						Boolean.TRUE.equals(menu.getSlot(4).getItem().get(DataComponents.ENCHANTMENT_GLINT_OVERRIDE)),
+						"Expected islandless player to land on Blueprints & Info tab (slot 4)"
+					);
+
+					// Step 2: Verify ChestMenu immunity to vanilla dupe/swap/quick-move/clone/throw packets
+					int testBpSlot = findContentSlotByName(menu, "Panel Test");
+					helper.assertTrue(testBpSlot >= 0, "Expected Panel Test blueprint icon inside panel grid");
+					menu.clicked(testBpSlot, 0, ContainerInput.SWAP, owner);
+					menu.clicked(testBpSlot, 40, ContainerInput.SWAP, owner);
+					menu.clicked(testBpSlot, 0, ContainerInput.THROW, owner);
+					menu.clicked(testBpSlot, 0, ContainerInput.CLONE, owner);
+					menu.clicked(testBpSlot, 0, ContainerInput.PICKUP_ALL, owner);
+					menu.clicked(testBpSlot, 0, ContainerInput.QUICK_CRAFT, owner);
+					menu.clicked(54, 0, ContainerInput.PICKUP, owner);
+					ItemStack quickMoved = menu.quickMoveStack(owner, testBpSlot);
+					helper.assertTrue(quickMoved.isEmpty(), "Expected quickMoveStack to return ItemStack.EMPTY");
+					helper.assertTrue(menu.getCarried().isEmpty(), "Expected carried stack to remain empty");
+					helper.assertTrue(owner.getInventory().getItem(0).is(Items.DIAMOND)
+						&& owner.getInventory().getItem(0).getCount() == 3, "Expected player hotbar diamond untouched");
+					helper.assertTrue(owner.getOffhandItem().is(Items.SHIELD), "Expected offhand shield untouched");
+
+					// Step 3: Click Panel Test blueprint to create island for islandless player
+					menu.clicked(testBpSlot, 0, ContainerInput.PICKUP, owner);
+					Island created = islands.grid().findPrimaryIsland(ownerId).orElse(null);
+					helper.assertTrue(created != null, "Expected blueprint click to create island");
+					createdIslandId.set(created.islandId());
+					helper.assertTrue("panel_test".equals(created.bundleId()), "Expected created island to use panel_test bundle");
+					helper.assertTrue(!(owner.containerMenu instanceof ChestMenu), "Expected menu to close after creation");
+					for (int t = 0; t < 20 && created.isPasting(); t++) {
+						coreApi.blueprints().tick(server);
+					}
+
+					// Step 4: Add a member + ban a UUID, then test cached /is settings & tab clicks
+					helper.assertTrue(coreApi.team().inviteMember(created, ownerId, memberId).success(), "Invite member");
+					helper.assertTrue(coreApi.team().acceptInvite(memberId).success(), "Accept invite");
+					helper.assertTrue(coreApi.team().banPlayer(server, created, ownerId, bannedId, false).success(), "Ban UUID");
+
+					server.getCommands().performPrefixedCommand(owner.createCommandSourceStack(), "is settings");
+					helper.assertTrue(owner.containerMenu instanceof ChestMenu, "Expected cached /is settings to open synchronously");
+					ChestMenu settingsMenu = (ChestMenu) owner.containerMenu;
+					helper.assertTrue(
+						Boolean.TRUE.equals(settingsMenu.getSlot(1).getItem().get(DataComponents.ENCHANTMENT_GLINT_OVERRIDE)),
+						"Expected Protection Flags tab (slot 1) highlighted"
+					);
+
+					int breakSlot = findContentSlotByName(settingsMenu, "Break Blocks");
+					helper.assertTrue(breakSlot >= 0, "Expected Break Blocks flag in Basic mode");
+					helper.assertTrue(created.protectionRankBySlot(coreApi.flags().slotOf(BuiltinFlags.BREAK_BLOCKS)) == IslandRole.MEMBER,
+						"Expected Break Blocks default rank MEMBER");
+					settingsMenu.clicked(breakSlot, 0, ContainerInput.PICKUP, owner);
+					helper.assertTrue(created.protectionRankBySlot(coreApi.flags().slotOf(BuiltinFlags.BREAK_BLOCKS)) == IslandRole.ADMIN,
+						"Left-click must raise Break Blocks to ADMIN");
+					settingsMenu.clicked(breakSlot, 1, ContainerInput.PICKUP, owner);
+					helper.assertTrue(created.protectionRankBySlot(coreApi.flags().slotOf(BuiltinFlags.BREAK_BLOCKS)) == IslandRole.MEMBER,
+						"Right-click must lower Break Blocks back to MEMBER");
+					settingsMenu.clicked(breakSlot, 0, ContainerInput.PICKUP, owner);
+					settingsMenu.clicked(breakSlot, 0, ContainerInput.QUICK_MOVE, owner);
+					helper.assertTrue(created.protectionRankBySlot(coreApi.flags().slotOf(BuiltinFlags.BREAK_BLOCKS)) == IslandRole.MEMBER,
+						"Shift-click must reset Break Blocks to default");
+
+					// Switch to Members tab (slot 3): unban, promote, demote, 2-step kick
+					settingsMenu.clicked(3, 0, ContainerInput.PICKUP, owner);
+					int bannedSlot = findContentSlotByName(settingsMenu, bannedId.toString().substring(0, 8));
+					helper.assertTrue(bannedSlot >= 0, "Expected banned player head in Members tab");
+					settingsMenu.clicked(bannedSlot, 0, ContainerInput.PICKUP, owner);
+					helper.assertTrue(!created.isBanned(bannedId), "Clicking banned head must unban player");
+
+					int memberSlot = findContentSlotByName(settingsMenu, "PanelMember");
+					helper.assertTrue(memberSlot >= 0, "Expected PanelMember head in Members tab");
+					settingsMenu.clicked(memberSlot, 0, ContainerInput.PICKUP, owner);
+					helper.assertTrue(created.roleOf(memberId) == IslandRole.ADMIN, "Left-click must promote member to ADMIN");
+					settingsMenu.clicked(memberSlot, 1, ContainerInput.PICKUP, owner);
+					helper.assertTrue(created.roleOf(memberId) == IslandRole.MEMBER, "Right-click must demote admin to MEMBER");
+					settingsMenu.clicked(memberSlot, 0, ContainerInput.QUICK_MOVE, owner);
+					helper.assertTrue(created.roleOf(memberId) == IslandRole.MEMBER, "First Shift-Left click must only prompt confirmation");
+					settingsMenu.clicked(memberSlot, 0, ContainerInput.QUICK_MOVE, owner);
+					helper.assertTrue(created.roleOf(memberId) == IslandRole.VISITOR, "Second Shift-Left click must confirm kick");
+
+					// Switch to Island Settings tab (slot 2), verify top-bar Lock Status badge (slot 7) and live refresh
+					settingsMenu.clicked(2, 0, ContainerInput.PICKUP, owner);
+					helper.assertTrue(
+						settingsMenu.getSlot(7).getItem().is(Items.OAK_DOOR)
+							&& !Boolean.TRUE.equals(settingsMenu.getSlot(7).getItem().get(DataComponents.ENCHANTMENT_GLINT_OVERRIDE)),
+						"Expected top-bar lock badge (slot 7) to show UNLOCKED (OAK_DOOR, unglinted)"
+					);
+					int lockSlot = findContentSlotByName(settingsMenu, "Island Lock");
+					helper.assertTrue(lockSlot >= 0, "Expected Island Lock in Island Settings tab");
+					helper.assertTrue(
+						!Boolean.TRUE.equals(settingsMenu.getSlot(lockSlot).getItem().get(DataComponents.ENCHANTMENT_GLINT_OVERRIDE)),
+						"Expected Island Lock initially unglinted"
+					);
+					// Clicking top-bar lock badge locks island directly and updates Actions tab entry dynamically
+					settingsMenu.clicked(7, 0, ContainerInput.PICKUP, owner);
+					helper.assertTrue(created.isSettingEnabled(BuiltinFlags.ISLAND_LOCK), "Clicking slot 7 must lock island");
+					helper.assertTrue(
+						settingsMenu.getSlot(7).getItem().is(Items.IRON_BARS)
+							&& Boolean.TRUE.equals(settingsMenu.getSlot(7).getItem().get(DataComponents.ENCHANTMENT_GLINT_OVERRIDE)),
+						"Expected top-bar lock badge (slot 7) to show LOCKED (IRON_BARS, glinted)"
+					);
+					settingsMenu.clicked(0, 0, ContainerInput.PICKUP, owner); // Actions tab
+					int actionLockSlot = findContentSlotByName(settingsMenu, "Island Lock: LOCKED");
+					helper.assertTrue(
+						actionLockSlot >= 0
+							&& settingsMenu.getSlot(actionLockSlot).getItem().is(Items.IRON_BARS)
+							&& Boolean.TRUE.equals(settingsMenu.getSlot(actionLockSlot).getItem().get(DataComponents.ENCHANTMENT_GLINT_OVERRIDE)),
+						"Expected Actions tab toggle_lock entry to reflect LOCKED state dynamically"
+					);
+					// Clicking slot 7 again unlocks island before testing external lock event refresh
+					settingsMenu.clicked(7, 0, ContainerInput.PICKUP, owner);
+					helper.assertTrue(!created.isSettingEnabled(BuiltinFlags.ISLAND_LOCK), "Clicking slot 7 again must unlock island");
+					settingsMenu.clicked(2, 0, ContainerInput.PICKUP, owner);
+					helper.assertTrue(
+						!Boolean.TRUE.equals(settingsMenu.getSlot(lockSlot).getItem().get(DataComponents.ENCHANTMENT_GLINT_OVERRIDE)),
+						"Expected Island Lock unglinted again after unlock"
+					);
+					helper.assertTrue(
+						coreApi.islands().setSettingFlag(server, ownerId, created.islandId(), BuiltinFlags.ISLAND_LOCK, true, false).success(),
+						"External Island Lock mutation must succeed"
+					);
+				}))
+				.thenIdle(1)
+				.thenExecute(guarded(cleanup, () -> {
+					ChestMenu menu = (ChestMenu) owner.containerMenu;
+					Island created = islands.grid().findById(createdIslandId.get()).orElseThrow();
+					int lockSlot = findContentSlotByName(menu, "Island Lock");
+					helper.assertTrue(
+						Boolean.TRUE.equals(menu.getSlot(lockSlot).getItem().get(DataComponents.ENCHANTMENT_GLINT_OVERRIDE)),
+						"Expected OgskyEventBus live refresh to update Island Lock item glint on open ChestMenu"
+					);
+
+					// Step 5: 2-step reset confirmation on Blueprints & Info tab (slot 4)
+					menu.clicked(4, 0, ContainerInput.PICKUP, owner);
+					int altBpSlot = findContentSlotByName(menu, "Panel Alt");
+					helper.assertTrue(altBpSlot >= 0, "Expected Panel Alt blueprint on Blueprints & Info tab");
+					menu.clicked(altBpSlot, 0, ContainerInput.PICKUP, owner);
+					helper.assertTrue("panel_test".equals(created.bundleId()), "First reset click must require confirmation");
+					helper.assertTrue(
+						Boolean.TRUE.equals(menu.getSlot(altBpSlot).getItem().get(DataComponents.ENCHANTMENT_GLINT_OVERRIDE)),
+						"Pending reset target should highlight with glint"
+					);
+					menu.clicked(altBpSlot, 0, ContainerInput.PICKUP, owner);
+					helper.assertTrue("panel_alt".equals(created.bundleId()), "Second click within TTL must reset island to panel_alt");
+					for (int t = 0; t < 20 && created.isPasting(); t++) {
+						coreApi.blueprints().tick(server);
+					}
+
+					// Verify async panel_preferences persisted viewer's latest tab choice ('blueprints_info') to panel.db
+					ModuleDatabase panelDb = coreApi.databases().require("panel");
+					panelDb.flush().join();
+					String persistedTab = panelDb.queryBlocking(conn -> {
+						try (var stmt = conn.prepareStatement("SELECT preferred_tab FROM panel_preferences WHERE player_uuid = ?")) {
+							stmt.setString(1, ownerId.toString());
+							try (ResultSet rs = stmt.executeQuery()) {
+								return rs.next() ? rs.getString(1) : null;
+							}
+						}
+					});
+					helper.assertTrue("blueprints_info".equals(persistedTab),
+						"Expected panel_preferences.preferred_tab persisted in SQLite, got: " + persistedTab);
+
+					cleanup.run();
+				}))
+				.thenSucceed();
+		} catch (Throwable t) {
+			cleanup.run();
+			if (t instanceof RuntimeException re) {
+				throw re;
+			}
+			if (t instanceof Error err) {
+				throw err;
+			}
+			throw new RuntimeException(t);
+		}
+	}
+
+	@GameTest
+	public void panelOffhandSwapAndCreativeDupePacketsBlocked(GameTestHelper helper) {
+		if (!FabricLoader.getInstance().isModLoaded("ogsky-panel")) {
+			helper.succeed();
+			return;
+		}
+
+		MinecraftServer server = helper.getLevel().getServer();
+		ServerLevel ogOverworld = server.getLevel(OgskyDimensions.OVERWORLD);
+		helper.assertTrue(ogOverworld != null, "Expected ogsky:overworld dimension");
+
+		AtomicReference<EmbeddedChannel> survivalChannelRef = new AtomicReference<>();
+		AtomicReference<EmbeddedChannel> creativeChannelRef = new AtomicReference<>();
+		ServerPlayer survival = createOnlineMockPlayer(
+			server, ogOverworld, UUID.randomUUID(), "PanelSwapSurv", GameType.SURVIVAL, survivalChannelRef
+		);
+		ServerPlayer creative = createOnlineMockPlayer(
+			server, ogOverworld, UUID.randomUUID(), "PanelSwapCrea", GameType.CREATIVE, creativeChannelRef
+		);
+		survival.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(Items.SHIELD, 1));
+		survival.getInventory().setItem(0, new ItemStack(Items.DIAMOND, 2));
+
+		Runnable cleanup = () -> {
+			try {
+				survival.closeContainer();
+				creative.closeContainer();
+			} catch (Exception ignored) {
+			}
+			server.getPlayerList().remove(survival);
+			server.getPlayerList().remove(creative);
+		};
+
+		try {
+			server.getCommands().performPrefixedCommand(survival.createCommandSourceStack(), "is panel");
+			server.getCommands().performPrefixedCommand(creative.createCommandSourceStack(), "is panel");
+
+			helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(
+					survival.containerMenu instanceof ChestMenu && creative.containerMenu instanceof ChestMenu,
+					"Expected both Survival and Creative mock players to open Ogsky panel ChestMenu"
+				))
+				.thenExecute(guarded(cleanup, () -> {
+					ChestMenu survMenu = (ChestMenu) survival.containerMenu;
+					ChestMenu creaMenu = (ChestMenu) creative.containerMenu;
+					EmbeddedChannel survCh = survivalChannelRef.get();
+					EmbeddedChannel creaCh = creativeChannelRef.get();
+
+					// Every panel slot icon must carry the hidden panel item marker
+					ItemStack iconCopy = creaMenu.getSlot(4).getItem().copy();
+					CustomData marker = iconCopy.get(DataComponents.CUSTOM_DATA);
+					helper.assertTrue(
+						marker != null && marker.copyTag().getBooleanOr("ogsky_panel_item", false),
+						"Expected panel icon stack to carry internal ogsky_panel_item marker"
+					);
+
+					// 1. Survival: simulate pressing 'F' (ContainerInput.SWAP, button 40) on panel slot 4 and slot 45
+					drainOutboundPackets(survCh);
+					Int2ObjectMap<HashedStack> fSwapChanged = new Int2ObjectOpenHashMap<>();
+					fSwapChanged.put(4, HashedStack.EMPTY);
+					survival.connection.handleContainerClick(new ServerboundContainerClickPacket(
+						survMenu.containerId,
+						survMenu.getStateId(),
+						(short) 4,
+						(byte) 40,
+						ContainerInput.SWAP,
+						fSwapChanged,
+						HashedStack.EMPTY
+					));
+					List<Packet<?>> survPackets = drainOutboundPackets(survCh);
+					String survPacketSummary = survPackets.stream()
+						.map(p -> p.getClass().getSimpleName())
+						.collect(java.util.stream.Collectors.joining(","));
+					helper.assertTrue(survival.getOffhandItem().is(Items.SHIELD),
+						"Expected Survival offhand Shield untouched after F-swap on panel slot");
+					helper.assertTrue(
+						survPackets.stream().anyMatch(p -> p instanceof ClientboundSetPlayerInventoryPacket inv
+							&& inv.slot() == Inventory.SLOT_OFFHAND
+							&& inv.contents().is(Items.SHIELD)),
+						"Expected server to send ClientboundSetPlayerInventoryPacket(40, SHIELD), got [" + survPacketSummary + "]"
+					);
+					helper.assertTrue(
+						survPackets.stream().anyMatch(p -> p instanceof ClientboundSetCursorItemPacket cur
+							&& cur.contents().isEmpty()),
+						"Expected server to send empty cursor sync packet after blocked F-swap"
+					);
+					helper.assertTrue(
+						survPackets.stream().anyMatch(p -> p instanceof ClientboundContainerSetContentPacket content
+							&& content.containerId() == survMenu.containerId
+							&& !content.items().get(4).isEmpty()),
+						"Expected server to resync panel content packet preserving slot 4"
+					);
+
+					// Survival: pressing '1' (button 0) must also resync hotbar slot 0 (diamond)
+					drainOutboundPackets(survCh);
+					Int2ObjectMap<HashedStack> hotbarSwapChanged = new Int2ObjectOpenHashMap<>();
+					hotbarSwapChanged.put(4, HashedStack.EMPTY);
+					survival.connection.handleContainerClick(new ServerboundContainerClickPacket(
+						survMenu.containerId,
+						survMenu.getStateId(),
+						(short) 4,
+						(byte) 0,
+						ContainerInput.SWAP,
+						hotbarSwapChanged,
+						HashedStack.EMPTY
+					));
+					List<Packet<?>> hotbarPackets = drainOutboundPackets(survCh);
+					helper.assertTrue(
+						survival.getInventory().getItem(0).is(Items.DIAMOND) && survival.getInventory().getItem(0).getCount() == 2,
+						"Expected Survival hotbar slot 0 untouched after hotbar swap attempt"
+					);
+					helper.assertTrue(
+						hotbarPackets.stream().anyMatch(p -> p instanceof ClientboundSetPlayerInventoryPacket inv
+							&& inv.slot() == 0
+							&& inv.contents().is(Items.DIAMOND)),
+						"Expected server to resync hotbar slot 0 after blocked 1-9 swap"
+					);
+
+					// 2. Creative: F-swap packet, offhand PlayerAction, and SetCreativeModeSlot injection must all fail
+					drainOutboundPackets(creaCh);
+					Int2ObjectMap<HashedStack> creaFSwap = new Int2ObjectOpenHashMap<>();
+					creaFSwap.put(4, HashedStack.EMPTY);
+					creative.connection.handleContainerClick(new ServerboundContainerClickPacket(
+						creaMenu.containerId,
+						creaMenu.getStateId(),
+						(short) 4,
+						(byte) 40,
+						ContainerInput.SWAP,
+						creaFSwap,
+						HashedStack.EMPTY
+					));
+					List<Packet<?>> creaPackets = drainOutboundPackets(creaCh);
+					helper.assertTrue(creative.getOffhandItem().isEmpty(),
+						"Expected Creative offhand empty after F-swap on panel slot");
+					helper.assertTrue(
+						creaPackets.stream().anyMatch(p -> p instanceof ClientboundSetPlayerInventoryPacket inv
+							&& inv.slot() == Inventory.SLOT_OFFHAND
+							&& inv.contents().isEmpty()),
+						"Expected server to send offhand clear packet in Creative mode too"
+					);
+
+					creative.connection.handlePlayerAction(new ServerboundPlayerActionPacket(
+						ServerboundPlayerActionPacket.Action.SWAP_ITEM_WITH_OFFHAND,
+						BlockPos.ZERO,
+						Direction.DOWN
+					));
+					helper.assertTrue(creative.getOffhandItem().isEmpty(),
+						"Expected offhand action blocked while panel menu is open");
+
+					// Attempt to inject an item via Creative slot packet while panel is open
+					creative.connection.handleSetCreativeModeSlot(
+						new ServerboundSetCreativeModeSlotPacket(InventoryMenu.SHIELD_SLOT, new ItemStack(Items.NETHERITE_BLOCK, 1))
+					);
+					helper.assertTrue(creative.getOffhandItem().isEmpty(),
+						"Expected ServerboundSetCreativeModeSlotPacket blocked while OgskyPanelMenu is open");
+
+					// Close panel and attempt to inject or drop a copied panel icon via Creative slot packet
+					creative.closeContainer();
+					creative.connection.handleSetCreativeModeSlot(
+						new ServerboundSetCreativeModeSlotPacket(InventoryMenu.SHIELD_SLOT, iconCopy.copy())
+					);
+					helper.assertTrue(creative.getOffhandItem().isEmpty(),
+						"Expected Creative offhand injection of marked panel icon rejected even after closing panel");
+
+					List<ItemEntity> dropped = ogOverworld.getEntitiesOfClass(
+						ItemEntity.class, creative.getBoundingBox().inflate(8.0)
+					);
+					creative.connection.handleSetCreativeModeSlot(
+						new ServerboundSetCreativeModeSlotPacket(-1, iconCopy.copy())
+					);
+					List<ItemEntity> droppedAfter = ogOverworld.getEntitiesOfClass(
+						ItemEntity.class, creative.getBoundingBox().inflate(8.0)
+					);
+					helper.assertTrue(droppedAfter.size() == dropped.size(),
+						"Expected Creative drop of marked panel icon blocked");
+
+					// Normal unmarked Creative items still work cleanly once panel is closed
+					creative.connection.handleSetCreativeModeSlot(
+						new ServerboundSetCreativeModeSlotPacket(36, new ItemStack(Items.OAK_PLANKS, 16))
+					);
+					helper.assertTrue(
+						creative.getInventory().getItem(0).is(Items.OAK_PLANKS) && creative.getInventory().getItem(0).getCount() == 16,
+						"Expected legitimate Creative inventory placement to continue working when panel is closed"
+					);
+
+					cleanup.run();
+				}))
+				.thenSucceed();
+		} catch (Throwable t) {
+			cleanup.run();
+			if (t instanceof RuntimeException re) {
+				throw re;
+			}
+			if (t instanceof Error err) {
+				throw err;
+			}
+			throw new RuntimeException(t);
+		}
+	}
+
+	private static Runnable guarded(Runnable cleanup, Runnable body) {
+		return () -> {
+			try {
+				body.run();
+			} catch (Throwable t) {
+				cleanup.run();
+				throw t;
+			}
+		};
+	}
+
+	private static int findContentSlotByName(ChestMenu menu, String expectedName) {
+		int[] contentSlots = {
+			10, 11, 12, 13, 14, 15, 16,
+			19, 20, 21, 22, 23, 24, 25,
+			28, 29, 30, 31, 32, 33, 34,
+			37, 38, 39, 40, 41, 42, 43
+		};
+		for (int slot : contentSlots) {
+			ItemStack stack = menu.getSlot(slot).getItem();
+			if (stack.isEmpty()) {
+				continue;
+			}
+			var customName = stack.get(DataComponents.CUSTOM_NAME);
+			if (customName != null && expectedName.equals(customName.getString())) {
+				return slot;
+			}
+		}
+		return -1;
+	}
+
+	private static void synthesizeSimpleBlueprintBundle(
+		ServerLevel scratchLevel,
+		Path bundleDir,
+		String id,
+		String displayName,
+		int order
+	) throws Exception {
+		Files.createDirectories(bundleDir);
+		BlockPos origin = new BlockPos(99_000 + order * 16, 120, 99_000);
+		scratchLevel.setBlock(origin, Blocks.STONE.defaultBlockState(), 18);
+		try {
+			StructureTemplate template = new StructureTemplate();
+			template.fillFromWorld(scratchLevel, origin, new Vec3i(1, 1, 1), false, List.of());
+			NbtIo.writeCompressed(template.save(new CompoundTag()), bundleDir.resolve("overworld.nbt"));
+		} finally {
+			scratchLevel.setBlock(origin, Blocks.AIR.defaultBlockState(), 18);
+		}
+		Files.writeString(bundleDir.resolve("bundle.json"), """
+			{
+			  "id": "%s",
+			  "displayName": "%s",
+			  "description": "GameTest panel starter",
+			  "icon": "minecraft:grass_block",
+			  "order": %d,
+			  "overworld": { "file": "overworld.nbt", "offsetY": 0 }
+			}
+			""".formatted(id, displayName, order));
+	}
+
 	private static void clearBlockPosIfLoaded(ServerLevel level, BlockPos center) {
 		for (int dx = -2; dx <= 2; dx++) {
 			for (int dy = -1; dy <= 2; dy++) {
@@ -974,6 +1788,17 @@ public final class OgskyBundleGameTests {
 		String username,
 		GameType mode
 	) {
+		return createOnlineMockPlayer(server, level, uuid, username, mode, null);
+	}
+
+	private static ServerPlayer createOnlineMockPlayer(
+		MinecraftServer server,
+		ServerLevel level,
+		UUID uuid,
+		String username,
+		GameType mode,
+		AtomicReference<EmbeddedChannel> outChannel
+	) {
 		CommonListenerCookie cookie = CommonListenerCookie.createInitial(new GameProfile(uuid, username), false);
 		ServerPlayer player = new ServerPlayer(server, level, cookie.gameProfile(), cookie.clientInformation()) {
 			@Override
@@ -988,9 +1813,25 @@ public final class OgskyBundleGameTests {
 		};
 		mode.updatePlayerAbilities(player.getAbilities());
 		Connection connection = new Connection(PacketFlow.SERVERBOUND);
-		new EmbeddedChannel(connection);
+		EmbeddedChannel channel = new EmbeddedChannel(connection);
+		if (outChannel != null) {
+			outChannel.set(channel);
+		}
 		server.getPlayerList().placeNewPlayer(connection, player, cookie);
 		return player;
+	}
+
+	private static List<Packet<?>> drainOutboundPackets(EmbeddedChannel channel) {
+		channel.flush();
+		channel.runPendingTasks();
+		List<Packet<?>> drained = new ArrayList<>();
+		Object msg;
+		while ((msg = channel.readOutbound()) != null) {
+			if (msg instanceof Packet<?> packet) {
+				drained.add(packet);
+			}
+		}
+		return drained;
 	}
 
 	private static void cleanupTestIsland(
