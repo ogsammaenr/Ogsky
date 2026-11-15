@@ -26,9 +26,9 @@ See canonical rules in [`docs/island-spec.md`](island-spec.md) and [`docs/flags-
 - [x] Register `/is panel` & `/is settings` via `core.commands()` + player UI preference persistence in `panel.db`
 
 ## Phase 3 — `level`: Island Level & Leaderboard
-- [ ] Configurable block-value table & chunk-batched async island scanner (covering shared 3 dimensions)
-- [ ] `level.db` storage, `/is level` & `/is top` via `core.commands()`, orphan island cleanup on startup & `IslandDeletedEvent` listener
-- [ ] Panel & GUI integration via `core.guis()` (`IslandSummaryContributor`, `/is top` paged screen) + `IslandActionDescriptor` + optional `IslandLevelProvider` service (with chat fallback when `ogsky-panel` is absent)
+- [x] Configurable `config/ogsky/level.json` block-value table (`100` pts/level formula & scoring-only `blockPointLimits` caps, separate from future `modules/limits` physical placement limits) & chunk-batched async island scanner (`core.scans()` / `IslandScanService` covering shared 3 dimensions)
+- [x] `level.db` storage, `/is level`, `/is top`, `/is values`, and `/isadmin level scan|scanall|reload` via `core.commands()`, orphan island cleanup on startup & `IslandDeletedEvent` listener
+- [x] Panel & GUI integration via `core.guis()` (`ogsky_level:summary`, `ogsky_level:top` paged screen, `ogsky_level:detail` breakdown screen, `ogsky_level:values` paged block-worth screen) + `IslandActionDescriptor` (`ogsky:island_level`, `ogsky_level:island_top`, `ogsky_level:block_values`) + `IslandLevelProvider` service & `IslandLevelCalculatedEvent` (with chat fallback when `ogsky-panel` is absent)
 
 ## Phase 4+ — Additional Modules & Optional Client Companion
 - [ ] Additional Skyblock modules (challenges, upgrades, warp/visit, generator/cobble ore upgrades)
