@@ -9,6 +9,7 @@ import me.ogsammaenr.ogsky.core.api.command.IslandCommandRegistry;
 import me.ogsammaenr.ogsky.core.api.db.DatabaseService;
 import me.ogsammaenr.ogsky.core.api.event.OgskyEventBus;
 import me.ogsammaenr.ogsky.core.api.flag.FlagRegistry;
+import me.ogsammaenr.ogsky.core.api.gui.GuiService;
 import me.ogsammaenr.ogsky.core.api.island.IslandOperationResult;
 import me.ogsammaenr.ogsky.core.api.island.IslandService;
 import me.ogsammaenr.ogsky.core.api.island.IslandView;
@@ -22,6 +23,7 @@ import me.ogsammaenr.ogsky.core.internal.db.SqliteDatabaseService;
 import me.ogsammaenr.ogsky.core.internal.event.SimpleOgskyEventBus;
 import me.ogsammaenr.ogsky.core.internal.flag.BuiltinFlags;
 import me.ogsammaenr.ogsky.core.internal.flag.SimpleFlagRegistry;
+import me.ogsammaenr.ogsky.core.internal.gui.SimpleGuiService;
 import me.ogsammaenr.ogsky.core.internal.island.CoreIslandService;
 import me.ogsammaenr.ogsky.core.internal.island.Island;
 import me.ogsammaenr.ogsky.core.internal.island.IslandLifecycleService;
@@ -54,6 +56,7 @@ public final class OgskyCoreApiImpl implements OgskyCoreApi {
 	private final SqliteDatabaseService databaseService = new SqliteDatabaseService();
 	private final SimpleFlagRegistry flagRegistry = new SimpleFlagRegistry();
 	private final SimpleIslandCommandRegistry commandRegistry = new SimpleIslandCommandRegistry();
+	private final SimpleGuiService guiService = new SimpleGuiService();
 	private final CoreConfig config;
 	private final @Nullable Path configPath;
 	private final CoreIslandService islandService;
@@ -184,6 +187,11 @@ public final class OgskyCoreApiImpl implements OgskyCoreApi {
 	@Override
 	public LuckPermsPermissionBridge permissions() {
 		return permissionBridge;
+	}
+
+	@Override
+	public GuiService guis() {
+		return guiService;
 	}
 
 	public ProtectionResolver protection() {
