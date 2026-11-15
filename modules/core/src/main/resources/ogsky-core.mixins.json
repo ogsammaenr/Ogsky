@@ -1,0 +1,26 @@
+{
+  "required": true,
+  "package": "me.ogsammaenr.ogsky.core.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "mixins": [
+    "NetherPortalBlockMixin",
+    "EndPortalBlockMixin",
+    "PortalForcerMixin",
+    "StructureTemplateAccessor",
+    "ItemEntityPickupMixin",
+    "PlayerDropMixin",
+    "BasePressurePlateMixin",
+    "FarmlandTrampleMixin",
+    "LeavesDecayMixin",
+    "FireSpreadMixin",
+    "FlowingFluidSpreadMixin",
+    "PistonCrossBorderMixin",
+    "ServerExplosionProtectionMixin",
+    "OfflineRedstoneMixin",
+    "NaturalSpawnerMixin",
+    "ThrownEnderpearlMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
