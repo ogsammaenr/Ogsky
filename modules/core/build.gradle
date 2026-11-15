@@ -1,0 +1,4 @@
+dependencies {
+	api "org.xerial:sqlite-jdbc:${project.sqlite_jdbc_version}"
+	include "org.xerial:sqlite-jdbc:${project.sqlite_jdbc_version}"
+}

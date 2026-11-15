@@ -1,81 +1,168 @@
 plugins {
 	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+	id 'java-library'
 	id 'maven-publish'
 }
 
-repositories {
-	// Add repositories to retrieve artifacts from in here.
-	// You should only use this when depending on other mods because
-	// Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
-	// See https://docs.gradle.org/current/userguide/declaring_repositories.html
-	// for more information about repositories.
+def availableModules = ['core', 'panel', 'level'] as Set
+def requestedModulesRaw = providers.gradleProperty('modules')
+		.orElse(providers.gradleProperty('enabled_modules'))
+		.get()
+
+def selectedModules = requestedModulesRaw.split(',')
+		.collect { it.trim() }
+		.findAll { !it.isEmpty() }
+		.toSet()
+
+selectedModules.each { mod ->
+	if (!availableModules.contains(mod)) {
+		throw new GradleException("Unknown Ogsky module '${mod}'. Available modules: ${availableModules.sort().join(', ')}")
+	}
+}
+selectedModules = (['core'] + selectedModules) as Set
+
+def moduleProjects = subprojects.findAll { it.path != ':modules' }
+def loomProjects = [rootProject] + moduleProjects
+
+configure(loomProjects) {
+	if (it != rootProject) {
+		apply plugin: 'net.fabricmc.fabric-loom'
+		apply plugin: 'java-library'
+		apply plugin: 'maven-publish'
+	}
+
+	group = project.group
+	version = project.version
+
+	repositories {
+		mavenCentral()
+	}
+
+	loom {
+		serverOnlyMinecraftJar()
+	}
+
+	dependencies {
+		minecraft "com.mojang:minecraft:${project.minecraft_version}"
+		implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+		implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+		testImplementation "net.fabricmc:fabric-loader-junit:${project.loader_version}"
+	}
+
+	tasks.withType(org.gradle.language.jvm.tasks.ProcessResources).configureEach {
+		def modVersion = project.version
+		inputs.property 'version', modVersion
+
+		filesMatching('fabric.mod.json') {
+			expand 'version': modVersion
+		}
+	}
+
+	tasks.withType(JavaCompile).configureEach {
+		it.options.release = 25
+		it.options.encoding = 'UTF-8'
+	}
+
+	tasks.withType(Test).configureEach {
+		useJUnitPlatform()
+		systemProperty 'fabric.side', 'server'
+	}
+
+	java {
+		withSourcesJar()
+		sourceCompatibility = JavaVersion.VERSION_25
+		targetCompatibility = JavaVersion.VERSION_25
+	}
+}
+
+configure(moduleProjects) {
+	base {
+		archivesName = "ogsky-${project.name}"
+	}
+
+	loom {
+		mods {
+			"ogsky-${project.name}" {
+				sourceSet sourceSets.main
+			}
+		}
+	}
+}
+
+base {
+	archivesName = 'ogsky'
 }
 
 loom {
-	splitEnvironmentSourceSets()
-
 	mods {
-		"ogsky" {
+		'ogsky' {
 			sourceSet sourceSets.main
-			sourceSet sourceSets.client
 		}
+	}
+}
+
+fabricApi {
+	configureTests {
+		createSourceSet = true
+		modId = 'ogsky-gametest'
+		enableGameTests = true
+		enableClientGameTests = false
+		eula = true
+		clearRunDirectory = true
 	}
 }
 
 dependencies {
-	// To change the versions see the gradle.properties file
-	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
-
-	// Fabric API. This is technically optional, but you probably want it anyway.
-	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-}
-
-processResources {
-	def version = project.version
-	inputs.property "version", version
-
-	filesMatching("fabric.mod.json") {
-		expand "version": version
+	selectedModules.each { modName ->
+		runtimeOnly project(":modules:${modName}")
+		include project(":modules:${modName}")
 	}
-}
 
-tasks.withType(JavaCompile).configureEach {
-	it.options.release = 25
-}
-
-java {
-	// Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
-	// if it is present.
-	// If you remove this line, sources will not be generated.
-	withSourcesJar()
-
-	sourceCompatibility = JavaVersion.VERSION_25
-	targetCompatibility = JavaVersion.VERSION_25
+	gametestImplementation project(':modules:core')
 }
 
 jar {
 	def projectName = project.name
-	inputs.property "projectName", projectName
+	inputs.property 'projectName', projectName
 
-	from("LICENSE") {
-		rename { "${it}_$projectName"}
+	from('LICENSE') {
+		rename { "${it}_${projectName}" }
 	}
 }
 
-// configure the maven publication
-publishing {
-	publications {
-		create("mavenJava", MavenPublication) {
-			from components.java
-		}
-	}
+def deployDirProvider = providers.gradleProperty('serverModsDir').orElse('/mc-server-mods')
+def bundleJarTask = tasks.named('jar', org.gradle.jvm.tasks.Jar)
 
-	// See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
-	repositories {
-		// Add repositories to publish to here.
-		// Notice: This block does NOT have the same function as the block in the top level.
-		// The repositories here will be used for publishing your artifact, not for
-		// retrieving dependencies.
+tasks.register('deployServer') {
+	group = 'fabric'
+	description = 'Builds the selected Ogsky server bundle JAR and copies it to the test server mods directory.'
+	dependsOn(bundleJarTask)
+
+	def archiveFileProvider = bundleJarTask.flatMap { it.archiveFile }
+	inputs.file(archiveFileProvider)
+
+	doLast {
+		def targetDir = new File(deployDirProvider.get())
+		if (!targetDir.exists() || !targetDir.isDirectory()) {
+			throw new GradleException(
+				"Test server mods directory not found at '${targetDir}'. " +
+				"Restart the container via updated Makefile (mounts /mc-server-mods) or pass -PserverModsDir=/path/to/mods."
+			)
+		}
+
+		targetDir.listFiles()?.each { existing ->
+			if (existing.isFile() && existing.name.startsWith('ogsky-') && existing.name.endsWith('.jar')) {
+				existing.delete()
+			}
+		}
+
+		def builtJar = archiveFileProvider.get().asFile
+		java.nio.file.Files.copy(
+			builtJar.toPath(),
+			targetDir.toPath().resolve(builtJar.name),
+			java.nio.file.StandardCopyOption.REPLACE_EXISTING
+		)
+		logger.lifecycle("Deployed ${builtJar.name} (modules: ${selectedModules.sort().join(', ')}) -> ${targetDir}")
 	}
 }

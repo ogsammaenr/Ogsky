@@ -1,0 +1,26 @@
+{
+	"schemaVersion": 1,
+	"id": "ogsky-core",
+	"version": "${version}",
+	"name": "Ogsky Core",
+	"description": "Core Skyblock island lifecycle, worldgen, protection, event bus, and SQLite database infrastructure.",
+	"authors": [
+		"ogsammaenr"
+	],
+	"license": "CC0-1.0",
+	"environment": "server",
+	"entrypoints": {
+		"main": [
+			"me.ogsammaenr.ogsky.core.internal.OgskyCoreMod"
+		]
+	},
+	"mixins": [
+		"ogsky-core.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

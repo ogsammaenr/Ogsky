@@ -21,8 +21,10 @@ jobs:
           distribution: 'microsoft'
       - name: make gradle wrapper executable
         run: chmod +x ./gradlew
-      - name: build
-        run: ./gradlew build
+      - name: verify core-only bundle
+        run: ./gradlew build -Pmodules=core --console=plain
+      - name: build full bundle and run tests
+        run: ./gradlew build --console=plain
       - name: capture build artifacts
         uses: actions/upload-artifact@v7
         with:
