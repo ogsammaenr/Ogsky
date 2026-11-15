@@ -18,13 +18,14 @@ Ogsky is a server-side, compile-time modular Skyblock mod for **Minecraft 26.3 (
 
 ## Module Dependency Rules
 
-- `modules/core` (`ogsky-core`): Owns Skyblock worldgen (`ogsky:overworld`, `ogsky:nether`, `ogsky:end`), `O(1)` `IslandGrid` + RAM `IslandCache`, `.nbt` blueprint bundle loader & tick-budgeted paster (with lazy Nether/End pasting), 3-tier protection engine (`FlagRegistry`), Brigadier `/is` command tree abstraction (`IslandCommandRegistry`), `OgskyEventBus`, `ServiceRegistry`, `IslandActionRegistry`, and `DatabaseService`. Zero dependency on optional modules.
-- `modules/panel` (`ogsky-panel`): Depends only on `core`. Builds UI-agnostic, **tabbed/paginated `PanelSnapshot` ViewModels** combining `core.actions()`, `core.flags()`, island members, and optional service data, renders vanilla `ChestMenu` (and will later emit optional `CustomPacketPayload` packets for a companion client UI mod). Also registers `/is panel` & `/is settings` via `core.commands()`.
-- `modules/level` (`ogsky-level`): Depends only on `core`. Calculates and stores island levels in `level.db`, reacts to `IslandDeletedEvent`, contributes `ogsky:island_level` action descriptor into `core.actions()`, and registers `/is level` & `/is top` via `core.commands()`.
+- `modules/core` (`ogsky-core`): Owns public contracts (`me.ogsammaenr.ogsky.core.api.*` including `gui.GuiService`), Skyblock worldgen (`ogsky:overworld`, `ogsky:nether`, `ogsky:end`), `O(1)` `IslandGrid` + RAM `IslandCache`, `.nbt` blueprint bundle loader & tick-budgeted paster (with lazy Nether/End pasting), 3-tier protection engine (`FlagRegistry`), Brigadier `/is` command tree abstraction (`IslandCommandRegistry`), `OgskyEventBus`, `ServiceRegistry`, `IslandActionRegistry`, `GuiService`, and `DatabaseService`. Zero dependency on optional modules.
+- `modules/panel` (`ogsky-panel`): Depends only on `core`. Builds UI-agnostic, **tabbed/paginated `PanelSnapshot` ViewModels** combining `core.actions()`, `core.flags()`, island members, `core.guis()` summary contributors, and optional service data; binds `PanelGuiHost` onto `OgskyCore.api().guis()` so all optional module screens render through the shared dupe-proof `OgskyReadOnlyChestMenu` (`OgskyPanelMenu` + `OgskyCustomGuiMenu`); and registers `/is panel` & `/is settings` via `core.commands()`.
+- `modules/level` (`ogsky-level`): Depends only on `core`. Calculates and stores island levels in `level.db`, reacts to `IslandDeletedEvent`, contributes `ogsky:island_level` summary lines/screens/actions into `core.actions()` and `core.guis()` (falling back cleanly to chat output when `ogsky-panel` is not bundled), and registers `/is level` & `/is top` via `core.commands()`.
 
 > Related specs:
 > - Domain model, grid, lazy Nether/End, `.nbt` blueprints & RAM layout: [docs/island-spec.md](island-spec.md)
 > - 3-tier flags, protections, events & command contracts: [docs/flags-and-events.md](flags-and-events.md)
+> - Shared declarative GUI abstraction (`core.guis()`): [docs/gui-api.md](gui-api.md)
 > - Implementation phases: [docs/roadmap.md](roadmap.md)
 
 ## Per-Module SQLite Persistence
@@ -36,13 +37,15 @@ Ogsky is a server-side, compile-time modular Skyblock mod for **Minecraft 26.3 (
 - Removing a module from `-Pmodules=...` preserves its `.db` file untouched on disk.
 - Domain event invariant: async DB callbacks MUST marshal back to the server thread (`server.execute(...)`) before publishing to `OgskyEventBus`.
 
-## Hybrid GUI Strategy (`TabbedPanel` → `PanelSnapshot`)
+## Hybrid GUI Strategy (`TabbedPanel` → `PanelSnapshot` + `core.api.gui`)
 
 Inspired by BentoBox's `TabbedPanel` & `PanelItem` pattern:
 
-1. **Server-Validated Tabbed ViewModel (`PanelSnapshot`):**
-   - `ogsky-panel` builds UI-agnostic tabs (`Actions`, `Protections`, `Settings`, `Members`, `Blueprints` / module tabs) from `core.actions()`, `core.flags()`, island state, and optional registered services.
-2. **Phase 1–2 (Server-Only Vanilla Clients):**
-   - `panel` renders `PanelSnapshot` tabs & paginated items via server-side `ChestMenu` + click handlers executing server-validated flag/role/action mutations.
-3. **Phase 3+ (Optional Client Companion Mod):**
-   - A future `modules/client-ui` mod registers custom `CustomPacketPayload` channels. When `ServerPlayNetworking.canSend(player, ...)` is true, the server sends `PanelSnapshot` over the payload instead of opening a `ChestMenu`; vanilla clients seamlessly fall back to `ChestMenu`.
+1. **Server-Validated Declarative ViewModels (`PanelSnapshot` + `core.api.gui`):**
+   - `modules/core` exposes UI-agnostic `GuiService` (`OgskyCore.api().guis()`), `GuiScreenModel`, `GuiButton`, and `IslandSummaryContributor` contracts (zero `ChestMenu`/`Slot`/`ItemStack` dependencies) so any optional module can declare paginated or fixed sub-screens and slot-8 summary contributions.
+   - `ogsky-panel` builds the core 5-tab `PanelSnapshot` (`Actions`, `Protection Flags`, `Settings Flags`, `Members`, `Blueprints & Info`) incorporating registered `core.actions()`, `core.flags()`, island state, and `core.guis().collectSummaryLines(...)`.
+2. **Server-Only Vanilla Clients (`OgskyReadOnlyChestMenu` + `PanelGuiHost`):**
+   - `ogsky-panel` binds `PanelGuiHost` onto `core.guis()` and renders both `OgskyPanelMenu` and module-contributed `OgskyCustomGuiMenu` instances over a shared dupe-proof `OgskyReadOnlyChestMenu` (`ReadOnlySlot`, `ogsky_panel_item` marker, `ServerGamePacketListenerImplMixin` creative/offhand guards, two-click confirmations, and automatic `"Back to Control Panel"` return links).
+   - When `ogsky-panel` is omitted via `-Pmodules=core,<mod>`, `core.guis().isAvailable()` is `false` and commands gracefully fall back to formatted chat output.
+3. **Phase 4+ (Optional Client Companion Mod):**
+   - A future `modules/client-ui` mod registers custom `CustomPacketPayload` channels. When `ServerPlayNetworking.canSend(player, ...)` is true, the server sends `PanelSnapshot` / `GuiScreenModel` state over the payload instead of opening a `ChestMenu`; vanilla clients seamlessly fall back to `ChestMenu`.

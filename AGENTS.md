@@ -14,7 +14,8 @@ Ogsky is a **server-side, compile-time modular Skyblock mod** for **Minecraft `2
    - `modules/core` (`ogsky-core`) exposes public contracts under `me.ogsammaenr.ogsky.core.api.*` and owns Skyblock worldgen, blueprints/paster, island lifecycle, flags & protection, `/is` command tree root, event bus, service registry, action registry, and SQLite database lifecycle.
    - `modules/core` MUST NEVER depend on or import any optional module (`panel`, `level`, etc.).
    - Optional modules (`modules/panel`, `modules/level`, future modules) depend **only** on `:modules:core` (`me.ogsammaenr.ogsky.core.api.*`). They MUST NEVER depend on or import each other.
-   - Cross-module communication happens exclusively through `OgskyCore.api().events()`, `OgskyCore.api().services()`, `OgskyCore.api().actions()`, and (when implemented in Phase 1) `FlagRegistry` / `IslandCommandRegistry`.
+   - Cross-module communication happens exclusively through `OgskyCore.api().events()`, `OgskyCore.api().services()`, `OgskyCore.api().actions()`, `OgskyCore.api().guis()`, `FlagRegistry`, and `IslandCommandRegistry`.
+   - Optional modules (`level`, future `warps`, etc.) MUST NOT build custom `ChestMenu`/`Slot`/inventory mixins of their own. All custom module GUIs and `/is panel` summary lines go through `OgskyCore.api().guis()` ([docs/gui-api.md](docs/gui-api.md)) and fall back gracefully to chat output when `core.guis().isAvailable()` is `false`.
 4. **Compile-Time Module Selection (`-Pmodules=...`):**
    - `settings.gradle` always includes all modules so IDE/agents index everything.
    - Root `build.gradle` bundles only selected modules (default from `gradle.properties` `enabled_modules`; `core` is always included) via Jar-in-Jar (`include`).
@@ -24,8 +25,8 @@ Ogsky is a **server-side, compile-time modular Skyblock mod** for **Minecraft `2
    - Each module persists its own state in `<world>/ogsky/data/<moduleId>.db` via `OgskyCore.api().databases().registerModule(...)`.
    - Never cross-query another module's `.db` file. Cross-module keys are `island_id` (`UUID`) and `player_uuid` (`UUID`) synchronized via domain events (e.g. `IslandDeletedEvent`) and startup/lazy orphan reconciliation.
    - Never run blocking SQLite queries/writes (`queryBlocking`/`executeBlocking`) on the server tick thread during gameplay; use `queryAsync`/`executeAsync` and marshal world updates & event publishing back onto `server.execute(...)`.
-6. **Hybrid GUI Readiness (`ogsky-panel`):**
-   - Build server-side panel features around UI-agnostic, tabbed `PanelSnapshot` / ViewModel data (adapting BentoBox's `TabbedPanel`) so vanilla clients use `ChestMenu` and a future optional client mod can render custom `Screen`s from the same server-validated state.
+6. **Hybrid GUI Readiness (`core.api.gui` + `ogsky-panel`):**
+   - Build server-side panel features around UI-agnostic, tabbed `PanelSnapshot` / ViewModel data (adapting BentoBox's `TabbedPanel`) and `core.api.gui` (`GuiScreenModel` / `GuiButton` / `GuiService`, see [docs/gui-api.md](docs/gui-api.md)) so vanilla clients render via `ogsky-panel`'s shared dupe-proof `ChestMenu` host (`OgskyReadOnlyChestMenu`) and a future optional client mod can render custom `Screen`s from the same server-validated state.
 
 ## Minecraft 26.3 Verification Rule
 

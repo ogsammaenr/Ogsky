@@ -33,8 +33,9 @@ All optional features live in isolated Gradle subprojects under `modules/<name>`
    - Never import another optional module. Use:
      - `OgskyCore.api().events().subscribe(...)` for lifecycle/team/flag reactions (always handle `IslandDeletedEvent` if storing island-keyed data; keep listeners on main server thread).
      - `OgskyCore.api().actions().register(...)` to contribute entries to `ogsky-panel`.
+     - `OgskyCore.api().guis().registerScreen(...)` and `registerSummaryContributor(...)` to expose interactive sub-screens and `/is panel` slot-8 summary lines without depending on `ogsky-panel` (always fall back to chat when `!OgskyCore.api().guis().isAvailable()`; never create custom `ChestMenu` subclasses or inventory mixins outside `modules/panel`). See [docs/gui-api.md](../../../docs/gui-api.md).
      - `OgskyCore.api().services().register(...)` / `find(...)` for optional capabilities.
-     - *(Phase 1+)* Core `FlagRegistry` for custom `PROTECTION` / `SETTING` / `WORLD_SETTING` flags and Core `IslandCommandRegistry` to register `/is <subcommand>` nodes.
+     - Core `FlagRegistry` (`core.flags()`) for custom `PROTECTION` / `SETTING` / `WORLD_SETTING` flags and Core `IslandCommandRegistry` (`core.commands()`) to register `/is <subcommand>` nodes.
 4. **Add Tests:**
    - Unit tests under `modules/<name>/src/test/java/...` using `OgskyCoreApiImpl` + `@TempDir` for isolated SQLite testing.
    - Integration assertions in `src/gametest/java/me/ogsammaenr/ogsky/gametest/OgskyBundleGameTests.java` gated with `FabricLoader.getInstance().isModLoaded("ogsky-<name>")`.
