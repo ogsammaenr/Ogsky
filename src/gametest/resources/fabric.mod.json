@@ -1,0 +1,24 @@
+{
+	"schemaVersion": 1,
+	"id": "ogsky-gametest",
+	"version": "${version}",
+	"name": "Ogsky GameTests",
+	"description": "Headless server GameTests for Ogsky module bundles.",
+	"license": "CC0-1.0",
+	"environment": "server",
+	"entrypoints": {
+		"fabric-gametest": [
+			"me.ogsammaenr.ogsky.gametest.OgskyBundleGameTests"
+		]
+	},
+	"mixins": [
+		"ogsky-gametest.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*",
+		"ogsky-core": "*"
+	}
+}
