@@ -1,5 +1,8 @@
 package me.ogsammaenr.ogsky.core;
 
+import me.ogsammaenr.ogsky.core.api.OgskyCore;
+import me.ogsammaenr.ogsky.core.api.action.IslandActionDescriptor;
+import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintBundleView;
 import me.ogsammaenr.ogsky.core.api.db.ModuleDatabase;
 import me.ogsammaenr.ogsky.core.api.event.IslandCreatedEvent;
 import me.ogsammaenr.ogsky.core.api.event.IslandDeletedEvent;
@@ -15,7 +18,10 @@ import me.ogsammaenr.ogsky.core.api.event.TeamKickEvent;
 import me.ogsammaenr.ogsky.core.api.event.TeamLeaveEvent;
 import me.ogsammaenr.ogsky.core.api.event.TeamOwnerChangeEvent;
 import me.ogsammaenr.ogsky.core.api.event.TeamRankChangeEvent;
+import me.ogsammaenr.ogsky.core.api.island.IslandOperationResult;
 import me.ogsammaenr.ogsky.core.api.island.IslandRole;
+import me.ogsammaenr.ogsky.core.api.island.IslandService;
+import me.ogsammaenr.ogsky.core.api.island.IslandView;
 import me.ogsammaenr.ogsky.core.internal.OgskyCoreApiImpl;
 import me.ogsammaenr.ogsky.core.internal.config.CoreConfig;
 import me.ogsammaenr.ogsky.core.internal.flag.BuiltinFlags;
@@ -23,6 +29,10 @@ import me.ogsammaenr.ogsky.core.internal.island.CoreIslandRepository;
 import me.ogsammaenr.ogsky.core.internal.island.Island;
 import me.ogsammaenr.ogsky.core.internal.island.OperationResult;
 import me.ogsammaenr.ogsky.core.internal.island.TeamService;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.IntTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.NbtIo;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,6 +49,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class IslandLifecycleAndTeamTest {
@@ -72,8 +83,21 @@ class IslandLifecycleAndTeamTest {
 	private void createDummyOverworldBundle(String bundleId) throws Exception {
 		Path bundleDir = this.blueprintsDir.resolve(bundleId);
 		Files.createDirectories(bundleDir);
-		Files.write(bundleDir.resolve("overworld.nbt"), new byte[] { 1, 2, 3 });
+		NbtIo.writeCompressed(minimalStructureTag(), bundleDir.resolve("overworld.nbt"));
 		this.api.blueprints().registry().reload();
+	}
+
+	private static CompoundTag minimalStructureTag() {
+		CompoundTag tag = new CompoundTag();
+		ListTag size = new ListTag();
+		size.add(IntTag.valueOf(1));
+		size.add(IntTag.valueOf(1));
+		size.add(IntTag.valueOf(1));
+		tag.put("size", size);
+		tag.put("palette", new ListTag());
+		tag.put("blocks", new ListTag());
+		tag.put("entities", new ListTag());
+		return tag;
 	}
 
 	private void flushDb() {
@@ -260,6 +284,57 @@ class IslandLifecycleAndTeamTest {
 		assertEquals(2, rankEvents.size());
 		assertEquals(1, ownerEvents.size());
 		assertEquals(1, kickEvents.size());
+
+		flushDb();
+	}
+
+	@Test
+	void publicIslandServiceMutationsBlueprintsAndBuiltinActionsWork() throws Exception {
+		createDummyOverworldBundle("default");
+		createDummyOverworldBundle("skycave");
+		IslandService publicService = this.api.islands();
+
+		assertEquals(1, publicService.maxCoop());
+		assertEquals(2, publicService.maxTrusted());
+		assertEquals("default", publicService.defaultBlueprintId());
+		List<BlueprintBundleView> blueprints = publicService.availableBlueprints();
+		assertEquals(2, blueprints.size());
+		assertTrue(blueprints.stream().allMatch(BlueprintBundleView::hasOverworld));
+
+		UUID ownerId = UUID.randomUUID();
+		UUID otherId = UUID.randomUUID();
+		IslandOperationResult<IslandView> created = publicService.createIsland(null, null, ownerId, "default");
+		assertTrue(created.success());
+		IslandView view = created.value();
+		assertNotNull(view);
+		assertNotNull(view.createdAt());
+
+		assertTrue(publicService.setProtectionRank(ownerId, view.islandId(), BuiltinFlags.BREAK_BLOCKS, IslandRole.ADMIN, false).success());
+		assertEquals(IslandRole.ADMIN, publicService.findById(view.islandId()).orElseThrow().protectionRank(BuiltinFlags.BREAK_BLOCKS));
+		assertTrue(publicService.setSettingFlag(null, ownerId, view.islandId(), BuiltinFlags.ISLAND_LOCK, true, false).success());
+		assertTrue(publicService.findById(view.islandId()).orElseThrow().isSettingEnabled(BuiltinFlags.ISLAND_LOCK));
+
+		assertTrue(this.api.team().inviteMember(this.api.coreIslands().grid().findById(view.islandId()).orElseThrow(), ownerId, otherId).success());
+		assertTrue(this.api.team().acceptInvite(otherId).success());
+		assertEquals(IslandRole.ADMIN, publicService.promoteMember(view.islandId(), ownerId, otherId, false).value());
+		assertEquals(IslandRole.MEMBER, publicService.demoteMember(view.islandId(), ownerId, otherId, false).value());
+		assertTrue(publicService.banPlayer(null, view.islandId(), ownerId, otherId, false).success());
+		assertTrue(publicService.findById(view.islandId()).orElseThrow().isBanned(otherId));
+		assertTrue(publicService.unbanPlayer(view.islandId(), ownerId, otherId, false).success());
+		assertFalse(publicService.findById(view.islandId()).orElseThrow().isBanned(otherId));
+
+		// Reset through public API (actorId, islandId order must work for owner)
+		IslandOperationResult<IslandView> reset = publicService.resetIsland(null, ownerId, view.islandId(), "skycave", false);
+		assertTrue(reset.success(), reset.message());
+		assertEquals("skycave", reset.value().bundleId());
+
+		// Built-in panel actions
+		this.api.registerBuiltinActions();
+		List<IslandActionDescriptor> actions = this.api.actions().listOrdered();
+		assertEquals(5, actions.size());
+		assertEquals(OgskyCore.id("island_home"), actions.getFirst().id());
+		assertTrue(actions.getFirst().closePanelOnExecute());
+		assertFalse(actions.getLast().closePanelOnExecute());
 
 		flushDb();
 	}

@@ -409,7 +409,7 @@ public final class OgskyCommands implements IslandCommandHelper {
 		String resolvedBundleId = (requestedBundle == null || requestedBundle.isBlank())
 			? blueprintService.registry().defaultBundleId()
 			: requestedBundle;
-		if (!permissionBridge.hasBlueprintPermission(ctx.getSource(), resolvedBundleId)) {
+		if (!hasBundlePermission(ctx.getSource(), resolvedBundleId)) {
 			sendFailure(ctx.getSource(), "You do not have permission to use blueprint '" + resolvedBundleId + "'.");
 			return 0;
 		}
@@ -431,14 +431,20 @@ public final class OgskyCommands implements IslandCommandHelper {
 		String resolvedBundleId = (requestedBundle == null || requestedBundle.isBlank())
 			? blueprintService.registry().defaultBundleId()
 			: requestedBundle;
-		if (!permissionBridge.hasBlueprintPermission(ctx.getSource(), resolvedBundleId)) {
+		if (!hasBundlePermission(ctx.getSource(), resolvedBundleId)) {
 			sendFailure(ctx.getSource(), "You do not have permission to use blueprint '" + resolvedBundleId + "'.");
 			return 0;
 		}
 		return reportResult(
 			ctx.getSource(),
-			lifecycleService.resetIsland(ctx.getSource().getServer(), island.islandId(), player.getUUID(), requestedBundle, false)
+			lifecycleService.resetIsland(ctx.getSource().getServer(), player.getUUID(), island.islandId(), requestedBundle, false)
 		);
+	}
+
+	private boolean hasBundlePermission(CommandSourceStack source, String bundleId) {
+		return blueprintService.registry().find(bundleId)
+			.map(bundle -> permissionBridge.hasBlueprintPermission(source, bundle.toView()))
+			.orElseGet(() -> permissionBridge.hasBlueprintPermission(source, bundleId));
 	}
 
 	private int executeDelete(CommandContext<CommandSourceStack> ctx, boolean confirmed) {

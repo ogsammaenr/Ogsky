@@ -6,6 +6,7 @@ import me.ogsammaenr.ogsky.core.api.db.DatabaseService;
 import me.ogsammaenr.ogsky.core.api.event.OgskyEventBus;
 import me.ogsammaenr.ogsky.core.api.flag.FlagRegistry;
 import me.ogsammaenr.ogsky.core.api.island.IslandService;
+import me.ogsammaenr.ogsky.core.api.permission.PermissionService;
 import me.ogsammaenr.ogsky.core.api.service.ServiceRegistry;
 
 /**
@@ -25,4 +26,6 @@ public interface OgskyCoreApi {
 	IslandCommandRegistry commands();
 
 	IslandService islands();
+
+	PermissionService permissions();
 }

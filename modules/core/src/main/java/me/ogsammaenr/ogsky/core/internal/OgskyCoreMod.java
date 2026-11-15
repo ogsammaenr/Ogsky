@@ -42,6 +42,7 @@ public final class OgskyCoreMod implements ModInitializer {
 		Registry.register(BuiltInRegistries.CHUNK_GENERATOR, OgskyCore.id("void"), VoidChunkGenerator.CODEC);
 
 		api.databases().registerModule(CoreIslandRepository.MODULE_ID, CoreIslandRepository.MIGRATIONS);
+		api.registerBuiltinActions();
 
 		List<OgskyModule> modules = FabricLoader.getInstance()
 			.getEntrypoints("ogsky-module", OgskyModule.class)

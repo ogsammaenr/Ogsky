@@ -11,8 +11,10 @@ import java.util.Objects;
 public record IslandActionDescriptor(
 	Identifier id,
 	String title,
+	String description,
 	String iconItemId,
 	int sortOrder,
+	boolean closePanelOnExecute,
 	IslandActionHandler handler
 ) {
 	public IslandActionDescriptor {
@@ -20,9 +22,20 @@ public record IslandActionDescriptor(
 		if (title == null || title.isBlank()) {
 			throw new IllegalArgumentException("Action title must not be blank.");
 		}
+		description = description == null ? "" : description;
 		if (iconItemId == null || iconItemId.isBlank()) {
 			throw new IllegalArgumentException("Action iconItemId must not be blank.");
 		}
 		Objects.requireNonNull(handler, "handler");
+	}
+
+	public IslandActionDescriptor(
+		Identifier id,
+		String title,
+		String iconItemId,
+		int sortOrder,
+		IslandActionHandler handler
+	) {
+		this(id, title, "", iconItemId, sortOrder, false, handler);
 	}
 }

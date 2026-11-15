@@ -2,6 +2,7 @@ package me.ogsammaenr.ogsky.core.api.island;
 
 import net.minecraft.resources.Identifier;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -40,6 +41,8 @@ public interface IslandView {
 	}
 
 	String bundleId();
+
+	Instant createdAt();
 
 	boolean isOverworldReady();
 

@@ -435,7 +435,7 @@ public final class IslandLifecycleService {
 		if (def.isEmpty() || def.get().type() != FlagType.WORLD_SETTING) {
 			return OperationResult.fail("unknown_flag", "Unknown WORLD_SETTING flag: " + flagId);
 		}
-		this.islandService.setWorldSetting(flagId, enabled);
+		this.islandService.applyWorldSetting(flagId, enabled);
 		return OperationResult.ok("updated", "Updated world setting " + flagId + " to " + enabled + ".", enabled);
 	}
 

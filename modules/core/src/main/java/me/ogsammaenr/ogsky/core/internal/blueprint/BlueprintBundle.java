@@ -1,5 +1,6 @@
 package me.ogsammaenr.ogsky.core.internal.blueprint;
 
+import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintBundleView;
 import me.ogsammaenr.ogsky.core.api.island.IslandView;
 import me.ogsammaenr.ogsky.core.api.island.RelativeSpawn;
 import me.ogsammaenr.ogsky.core.internal.world.OgskyDimensions;
@@ -39,6 +40,21 @@ public record BlueprintBundle(
 
 	public boolean hasEnd() {
 		return endFile != null;
+	}
+
+	public BlueprintBundleView toView() {
+		return new BlueprintBundleView(
+			id,
+			metadata.displayName,
+			metadata.description,
+			metadata.iconItem,
+			metadata.requiresPermission,
+			metadata.permissionNode,
+			metadata.order,
+			hasOverworld(),
+			hasNether(),
+			hasEnd()
+		);
 	}
 
 	public @Nullable Path fileFor(ResourceKey<Level> dimension) {

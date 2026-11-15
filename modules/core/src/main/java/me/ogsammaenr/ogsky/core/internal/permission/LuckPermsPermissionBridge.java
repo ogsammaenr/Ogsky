@@ -1,11 +1,14 @@
 package me.ogsammaenr.ogsky.core.internal.permission;
 
 import me.ogsammaenr.ogsky.core.api.OgskyCore;
+import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintBundleView;
+import me.ogsammaenr.ogsky.core.api.permission.PermissionService;
 import me.ogsammaenr.ogsky.core.internal.config.CoreConfig;
 import net.fabricmc.fabric.api.permission.v1.PermissionContextOwner;
 import net.fabricmc.fabric.api.util.TriState;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.resources.Identifier;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.permissions.PermissionLevel;
 import net.minecraft.world.entity.player.Player;
 import org.jspecify.annotations.Nullable;
@@ -21,7 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Permission resolution bridge prioritizing LuckPerms (via reflection when present)
  * and {@code fabric-permission-api-v1}, with vanilla OP-level fallback from {@link CoreConfig}.
  */
-public final class LuckPermsPermissionBridge {
+public final class LuckPermsPermissionBridge implements PermissionService {
 	public static final String ADMIN_NODE = "ogsky.admin";
 	public static final String BYPASS_WILDCARD_NODE = "ogsky.admin.bypass.*";
 	public static final String BYPASS_PREFIX = "ogsky.admin.bypass.";
@@ -75,6 +78,11 @@ public final class LuckPermsPermissionBridge {
 		return hasOpLevel(player, fallbackOpLevel);
 	}
 
+	@Override
+	public boolean hasPermission(ServerPlayer player, String permissionNode, int fallbackOpLevel) {
+		return hasPermission((Player) player, permissionNode, fallbackOpLevel);
+	}
+
 	public boolean hasPermission(
 		UUID playerUuid,
 		PermissionLevel opLevel,
@@ -101,9 +109,44 @@ public final class LuckPermsPermissionBridge {
 		return hasPermission(player, ADMIN_NODE, config.admin.fallbackOpLevel);
 	}
 
+	@Override
+	public boolean hasAdmin(ServerPlayer player) {
+		return hasAdmin((Player) player);
+	}
+
 	public boolean hasBlueprintPermission(CommandSourceStack source, String bundleId) {
 		Objects.requireNonNull(bundleId, "bundleId");
 		return hasPermission(source, BLUEPRINT_PREFIX + bundleId.toLowerCase(Locale.ROOT), 0);
+	}
+
+	public boolean hasBlueprintPermission(CommandSourceStack source, BlueprintBundleView bundle) {
+		Objects.requireNonNull(bundle, "bundle");
+		String node = resolveBlueprintNode(bundle);
+		int fallback = bundle.requiresPermission() ? config.admin.fallbackOpLevel : 0;
+		return hasPermission(source, node, fallback);
+	}
+
+	@Override
+	public boolean hasBlueprintPermission(ServerPlayer player, String bundleId) {
+		Objects.requireNonNull(player, "player");
+		Objects.requireNonNull(bundleId, "bundleId");
+		return hasPermission(player, BLUEPRINT_PREFIX + bundleId.toLowerCase(Locale.ROOT), 0);
+	}
+
+	@Override
+	public boolean hasBlueprintPermission(ServerPlayer player, BlueprintBundleView bundle) {
+		Objects.requireNonNull(player, "player");
+		Objects.requireNonNull(bundle, "bundle");
+		String node = resolveBlueprintNode(bundle);
+		int fallback = bundle.requiresPermission() ? config.admin.fallbackOpLevel : 0;
+		return hasPermission(player, node, fallback);
+	}
+
+	private static String resolveBlueprintNode(BlueprintBundleView bundle) {
+		if (bundle.permissionNode() != null && !bundle.permissionNode().isBlank()) {
+			return bundle.permissionNode().trim();
+		}
+		return BLUEPRINT_PREFIX + bundle.id().toLowerCase(Locale.ROOT);
 	}
 
 	public boolean hasBypass(Player player, Identifier flagId) {
@@ -137,6 +180,11 @@ public final class LuckPermsPermissionBridge {
 			return session;
 		}
 		return Boolean.TRUE.equals(queryExplicit(player, BYPASS_WILDCARD_NODE));
+	}
+
+	@Override
+	public boolean isBypassActive(ServerPlayer player) {
+		return isBypassActive((Player) player);
 	}
 
 	public boolean toggleBypass(Player player) {
