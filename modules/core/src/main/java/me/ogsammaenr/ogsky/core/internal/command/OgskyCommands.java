@@ -54,6 +54,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 /**
  * Registers Brigadier {@code /island} ({@code /is}) and {@code /isadmin} ({@code /isa}) command trees,
@@ -70,7 +71,7 @@ public final class OgskyCommands implements IslandCommandHelper {
 	private final IslandCommandRegistry commandRegistry;
 	private final LuckPermsPermissionBridge permissionBridge;
 	private final ProtectionResolver protection;
-	private final Runnable reloadAction;
+	private final Consumer<MinecraftServer> reloadAction;
 	private final Map<UUID, Instant> pendingDeleteConfirmations = new ConcurrentHashMap<>();
 
 	public OgskyCommands(
@@ -82,7 +83,7 @@ public final class OgskyCommands implements IslandCommandHelper {
 		IslandCommandRegistry commandRegistry,
 		LuckPermsPermissionBridge permissionBridge,
 		ProtectionResolver protection,
-		Runnable reloadAction
+		Consumer<MinecraftServer> reloadAction
 	) {
 		this.islandService = Objects.requireNonNull(islandService, "islandService");
 		this.lifecycleService = Objects.requireNonNull(lifecycleService, "lifecycleService");
@@ -938,7 +939,7 @@ public final class OgskyCommands implements IslandCommandHelper {
 	}
 
 	private int executeAdminReload(CommandContext<CommandSourceStack> ctx) {
-		reloadAction.run();
+		reloadAction.accept(ctx.getSource().getServer());
 		sendSuccess(ctx.getSource(), "Reloaded core.json configuration and blueprint registry.");
 		return Command.SINGLE_SUCCESS;
 	}

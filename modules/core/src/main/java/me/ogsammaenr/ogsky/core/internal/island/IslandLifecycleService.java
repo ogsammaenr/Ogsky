@@ -117,7 +117,8 @@ public final class IslandLifecycleService {
 
 		if (server != null) {
 			UUID actorUuid = actor != null ? actor.getUUID() : ownerId;
-			boolean queued = this.blueprintService.enqueueOverworldPaste(server, island, bundle.id(), () -> {
+			String ownerNameHint = (actor != null && actor.getUUID().equals(ownerId)) ? actor.getScoreboardName() : null;
+			boolean queued = this.blueprintService.enqueueOverworldPaste(server, island, bundle.id(), ownerNameHint, () -> {
 				ServerPlayer target = server.getPlayerList().getPlayer(actorUuid);
 				if (target != null && !target.hasDisconnected()) {
 					teleportHome(server, target, island, OgskyDimensions.OVERWORLD);
@@ -128,6 +129,7 @@ public final class IslandLifecycleService {
 				return OperationResult.fail("blueprint_load_failed", "Failed to paste overworld blueprint '" + bundle.id() + "'.");
 			}
 		} else {
+			this.blueprintService.applyInitialOverworldSpawn(island, bundle, -64, 319);
 			island.setStateBit(Island.STATE_OVERWORLD_READY, true);
 		}
 
@@ -169,6 +171,10 @@ public final class IslandLifecycleService {
 		}
 
 		island.setBundleId(bundle.id());
+		RelativeSpawn resetDefaultSpawn = RelativeSpawn.atCenter(this.config.island.defaultSpawnY);
+		island.setOverworldSpawn(resetDefaultSpawn);
+		island.setNetherSpawn(resetDefaultSpawn);
+		island.setEndSpawn(resetDefaultSpawn);
 		island.setStateBit(Island.STATE_OVERWORLD_READY, false);
 		island.setStateBit(Island.STATE_NETHER_READY, false);
 		island.setStateBit(Island.STATE_END_READY, false);
@@ -203,6 +209,7 @@ public final class IslandLifecycleService {
 				}
 			);
 		} else {
+			this.blueprintService.applyInitialOverworldSpawn(island, bundle, -64, 319);
 			island.setStateBit(Island.STATE_PASTING, false);
 			island.setStateBit(Island.STATE_OVERWORLD_READY, true);
 			persistIsland(island);

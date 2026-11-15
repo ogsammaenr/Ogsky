@@ -9,6 +9,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -28,13 +29,15 @@ class CoreConfigTest {
 		assertEquals(1, created.membership.maxCoop);
 		assertEquals(2, created.membership.maxTrusted);
 		assertEquals("default", created.blueprints.defaultBundle);
+		assertEquals(4, created.blueprints.welcomeSignLines.size());
 		assertEquals("Ziyaretçi", created.roleDisplayName(IslandRole.VISITOR));
 
 		// Partial JSON should preserve user values and restore missing defaults
 		Files.writeString(path, """
 			{
 			  "grid": { "cellSize": 512 },
-			  "island": { "initialHalfSize": 40, "maxHalfSize": 200 }
+			  "island": { "initialHalfSize": 40, "maxHalfSize": 200 },
+			  "blueprints": { "welcomeSignLines": ["&6Selam", "{player}"] }
 			}
 			""");
 		CoreConfig reloaded = CoreConfigLoader.loadOrCreate(path);
@@ -43,6 +46,7 @@ class CoreConfigTest {
 		assertEquals(200, reloaded.island.maxHalfSize);
 		assertEquals("Sahip", reloaded.roleDisplayName(IslandRole.OWNER));
 		assertEquals(2, reloaded.admin.fallbackOpLevel);
+		assertEquals(List.of("&6Selam", "{player}"), reloaded.blueprints.welcomeSignLines);
 	}
 
 	@Test

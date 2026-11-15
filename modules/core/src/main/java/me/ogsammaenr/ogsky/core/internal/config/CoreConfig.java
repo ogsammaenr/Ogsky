@@ -2,7 +2,9 @@ package me.ogsammaenr.ogsky.core.internal.config;
 
 import me.ogsammaenr.ogsky.core.api.island.IslandRole;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -38,6 +40,7 @@ public final class CoreConfig {
 
 		roles.ensureDefaults();
 		flags.ensureDefaults();
+		blueprints.ensureDefaults();
 
 		if (grid.cellSize < 32 || (grid.cellSize % 16) != 0) {
 			throw new IllegalArgumentException(
@@ -117,6 +120,7 @@ public final class CoreConfig {
 		this.blueprints.cleanupChunksPerTick = fresh.blueprints.cleanupChunksPerTick;
 		this.blueprints.lazyNether = fresh.blueprints.lazyNether;
 		this.blueprints.lazyEnd = fresh.blueprints.lazyEnd;
+		this.blueprints.welcomeSignLines = new ArrayList<>(fresh.blueprints.welcomeSignLines);
 		this.voidTeleport.mode = fresh.voidTeleport.mode;
 		this.admin.fallbackOpLevel = fresh.admin.fallbackOpLevel;
 		this.flags.protectionDefaults.clear();
@@ -176,6 +180,29 @@ public final class CoreConfig {
 		public int cleanupChunksPerTick = 2;
 		public boolean lazyNether = true;
 		public boolean lazyEnd = true;
+		public List<String> welcomeSignLines = defaultWelcomeSignLines();
+
+		void ensureDefaults() {
+			if (welcomeSignLines == null) {
+				welcomeSignLines = defaultWelcomeSignLines();
+				return;
+			}
+			List<String> normalized = new ArrayList<>(4);
+			for (int i = 0; i < Math.min(4, welcomeSignLines.size()); i++) {
+				String line = welcomeSignLines.get(i);
+				normalized.add(line == null ? "" : line);
+			}
+			welcomeSignLines = normalized;
+		}
+
+		public static List<String> defaultWelcomeSignLines() {
+			return new ArrayList<>(List.of(
+				"&aHoş Geldin,",
+				"&f{player}",
+				"&7Adan hazır!",
+				"&e/is panel"
+			));
+		}
 	}
 
 	public static final class VoidTeleportConfig {

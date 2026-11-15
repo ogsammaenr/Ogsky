@@ -17,6 +17,8 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.players.NameAndId;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate;
 import org.jspecify.annotations.Nullable;
@@ -72,7 +74,11 @@ public final class CoreBlueprintService implements PortalRouter.LazyDimensionHan
 	}
 
 	public void onServerStarting() {
-		this.registry.reload();
+		onServerStarting(null);
+	}
+
+	public void onServerStarting(@Nullable MinecraftServer server) {
+		this.registry.reload(server != null ? server.getFixerUpper() : null);
 		this.paster.clear();
 		this.cleanupQueue = new ChunkCleanupQueue(this.config, this.islandService.grid(), this.databaseService);
 	}
@@ -90,10 +96,45 @@ public final class CoreBlueprintService implements PortalRouter.LazyDimensionHan
 		cleanupQueue().tick(server);
 	}
 
+	public void applyInitialOverworldSpawn(Island island, BlueprintBundle bundle, int minLevelY, int maxLevelY) {
+		Objects.requireNonNull(island, "island");
+		Objects.requireNonNull(bundle, "bundle");
+		CompressedBlueprint overworldBp = bundle.overworld();
+		if (overworldBp == null) {
+			return;
+		}
+		BlockPos origin = bundle.computePasteOrigin(
+			island,
+			OgskyDimensions.OVERWORLD,
+			overworldBp,
+			this.config.island.defaultSpawnY,
+			minLevelY,
+			maxLevelY
+		);
+		RelativeSpawn spawn = bundle.computeSpawn(
+			island,
+			OgskyDimensions.OVERWORLD,
+			overworldBp,
+			origin,
+			this.config.island.defaultSpawnY
+		);
+		island.setOverworldSpawn(spawn);
+	}
+
 	public boolean enqueueOverworldPaste(
 		MinecraftServer server,
 		Island island,
 		String bundleId,
+		@Nullable Runnable onComplete
+	) {
+		return enqueueOverworldPaste(server, island, bundleId, null, onComplete);
+	}
+
+	public boolean enqueueOverworldPaste(
+		MinecraftServer server,
+		Island island,
+		String bundleId,
+		@Nullable String ownerNameHint,
 		@Nullable Runnable onComplete
 	) {
 		ServerLevel overworld = server.getLevel(OgskyDimensions.OVERWORLD);
@@ -105,26 +146,33 @@ public final class CoreBlueprintService implements PortalRouter.LazyDimensionHan
 			return false;
 		}
 		BlueprintBundle bundle = resolved.get();
-		Path overworldNbt = bundle.overworldFile();
-		if (overworldNbt == null) {
+		CompressedBlueprint overworldBp = bundle.overworld();
+		if (overworldBp == null) {
 			return false;
 		}
 		try {
-			StructureTemplate template = this.registry.loadTemplate(overworld.holderLookup(Registries.BLOCK), overworldNbt);
+			StructureTemplate template = this.registry.decompressTemplate(overworld.holderLookup(Registries.BLOCK), overworldBp);
 			BlockPos origin = bundle.computePasteOrigin(
 				island,
 				OgskyDimensions.OVERWORLD,
-				template.getSize(),
+				overworldBp,
 				this.config.island.defaultSpawnY,
 				overworld.getMinY(),
 				overworld.getMaxY()
 			);
-			RelativeSpawn computedSpawn = bundle.computeSpawn(island, OgskyDimensions.OVERWORLD, this.config.island.defaultSpawnY);
+			RelativeSpawn computedSpawn = bundle.computeSpawn(
+				island,
+				OgskyDimensions.OVERWORLD,
+				overworldBp,
+				origin,
+				this.config.island.defaultSpawnY
+			);
 			island.setOverworldSpawn(computedSpawn);
-			this.paster.enqueuePaste(island, OgskyDimensions.OVERWORLD, overworld, template, origin, bundle.id(), onComplete);
+			BlueprintSignSupport.WelcomeContext welcomeContext = buildWelcomeContext(server, island, bundle, ownerNameHint);
+			this.paster.enqueuePaste(island, OgskyDimensions.OVERWORLD, overworld, template, origin, bundle.id(), welcomeContext, onComplete);
 			return true;
 		} catch (IOException ex) {
-			OgskyCore.LOGGER.error("Failed to load overworld blueprint '{}' from {}", bundle.id(), overworldNbt, ex);
+			OgskyCore.LOGGER.error("Failed to decompress overworld blueprint '{}' from RAM", bundle.id(), ex);
 			return false;
 		}
 	}
@@ -156,33 +204,33 @@ public final class CoreBlueprintService implements PortalRouter.LazyDimensionHan
 		Optional<BlueprintBundle> maybeBundle = this.registry.resolveWithFallback(island.bundleId());
 		if (maybeBundle.isPresent()) {
 			BlueprintBundle bundle = maybeBundle.get();
-			Path nbtFile = bundle.fileFor(targetDimension);
-			if (nbtFile != null) {
+			CompressedBlueprint compressed = bundle.blueprintFor(targetDimension);
+			if (compressed != null) {
 				try {
-					StructureTemplate template = this.registry.loadTemplate(targetLevel.holderLookup(Registries.BLOCK), nbtFile);
+					StructureTemplate template = this.registry.decompressTemplate(targetLevel.holderLookup(Registries.BLOCK), compressed);
 					int baseSpawnY = Math.clamp(this.config.island.defaultSpawnY, targetLevel.getMinY() + 2, targetLevel.getMaxY() - 10);
 					BlockPos origin = bundle.computePasteOrigin(
 						island,
 						targetDimension,
-						template.getSize(),
+						compressed,
 						baseSpawnY,
 						targetLevel.getMinY(),
 						targetLevel.getMaxY()
 					);
-					RelativeSpawn spawn = bundle.computeSpawn(island, targetDimension, baseSpawnY);
+					RelativeSpawn spawn = bundle.computeSpawn(island, targetDimension, compressed, origin, baseSpawnY);
 					if (targetDimension.equals(OgskyDimensions.NETHER)) {
 						island.setNetherSpawn(spawn);
 					} else {
 						island.setEndSpawn(spawn);
 					}
-					this.paster.pasteImmediately(island, targetDimension, targetLevel, template, origin, bundle.id());
+					BlueprintSignSupport.WelcomeContext welcomeContext = buildWelcomeContext(server, island, bundle, null);
+					this.paster.pasteImmediately(island, targetDimension, targetLevel, template, origin, bundle.id(), welcomeContext);
 					usedBundleId = bundle.id();
 				} catch (IOException ex) {
 					OgskyCore.LOGGER.error(
-						"Failed to load lazy blueprint '{}' ({}) from {}",
+						"Failed to decompress lazy blueprint '{}' ({}) from RAM",
 						bundle.id(),
 						targetDimension.identifier(),
-						nbtFile,
 						ex
 					);
 				}
@@ -203,5 +251,37 @@ public final class CoreBlueprintService implements PortalRouter.LazyDimensionHan
 			targetDimension.identifier(),
 			usedBundleId
 		));
+	}
+
+	private static BlueprintSignSupport.WelcomeContext buildWelcomeContext(
+		MinecraftServer server,
+		Island island,
+		BlueprintBundle bundle,
+		@Nullable String ownerNameHint
+	) {
+		String ownerName = resolveOwnerName(server, island.ownerId(), ownerNameHint);
+		return new BlueprintSignSupport.WelcomeContext(
+			ownerName,
+			bundle.id(),
+			bundle.metadata().displayName,
+			island.islandId(),
+			island.gridX(),
+			island.gridZ()
+		);
+	}
+
+	private static String resolveOwnerName(MinecraftServer server, java.util.UUID ownerId, @Nullable String ownerNameHint) {
+		ServerPlayer online = server.getPlayerList().getPlayer(ownerId);
+		if (online != null) {
+			return online.getScoreboardName();
+		}
+		Optional<String> cached = server.services().nameToIdCache().get(ownerId).map(NameAndId::name);
+		if (cached.isPresent() && !cached.get().isBlank()) {
+			return cached.get();
+		}
+		if (ownerNameHint != null && !ownerNameHint.isBlank()) {
+			return ownerNameHint;
+		}
+		return ownerId.toString().substring(0, 8);
 	}
 }

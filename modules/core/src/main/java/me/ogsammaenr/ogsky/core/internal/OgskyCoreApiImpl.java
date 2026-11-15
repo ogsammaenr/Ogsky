@@ -195,11 +195,15 @@ public final class OgskyCoreApiImpl implements OgskyCoreApi {
 	}
 
 	public void reloadConfigAndBlueprints() {
+		reloadConfigAndBlueprints(null);
+	}
+
+	public void reloadConfigAndBlueprints(@Nullable MinecraftServer server) {
 		if (configPath != null) {
 			CoreConfig fresh = CoreConfigLoader.loadOrCreate(configPath);
 			config.copyRuntimeFrom(fresh);
 		}
-		blueprintService.registry().reload();
+		blueprintService.registry().reload(server != null ? server.getFixerUpper() : null);
 	}
 
 	public void freezeRegistries() {

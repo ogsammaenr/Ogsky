@@ -2,11 +2,9 @@ package me.ogsammaenr.ogsky.core.internal.blueprint;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.mojang.datafixers.DataFixer;
 import me.ogsammaenr.ogsky.core.api.OgskyCore;
 import net.minecraft.core.HolderGetter;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.NbtAccounter;
-import net.minecraft.nbt.NbtIo;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate;
 import org.jspecify.annotations.Nullable;
@@ -21,13 +19,13 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
 /**
- * Discovers, validates, and caches {@link BlueprintBundle} definitions under {@code config/ogsky/blueprints/}.
+ * Discovers, validates, and eagerly compresses {@link BlueprintBundle} definitions under {@code config/ogsky/blueprints/}
+ * into compact in-memory {@link CompressedBlueprint} objects during startup and reloads.
  * Never generates starter {@code .nbt} content automatically; warns cleanly when the configured default bundle
- * does not yet contain {@code overworld.nbt}.
+ * does not yet contain a valid {@code overworld.nbt}.
  */
 public final class BlueprintBundleRegistry {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -35,7 +33,6 @@ public final class BlueprintBundleRegistry {
 	private final Path blueprintsDir;
 	private final String defaultBundleId;
 	private final Map<String, BlueprintBundle> bundles = new LinkedHashMap<>();
-	private final Map<Path, CompoundTag> cachedTags = new ConcurrentHashMap<>();
 
 	public BlueprintBundleRegistry(Path blueprintsDir, String defaultBundleId) {
 		this.blueprintsDir = Objects.requireNonNull(blueprintsDir, "blueprintsDir").toAbsolutePath().normalize();
@@ -51,8 +48,11 @@ public final class BlueprintBundleRegistry {
 	}
 
 	public synchronized void reload() {
+		reload(null);
+	}
+
+	public synchronized void reload(@Nullable DataFixer fixerUpper) {
 		this.bundles.clear();
-		this.cachedTags.clear();
 
 		try {
 			Files.createDirectories(this.blueprintsDir);
@@ -75,7 +75,7 @@ public final class BlueprintBundleRegistry {
 				OgskyCore.LOGGER.warn("Skipping invalid blueprint directory name '{}' under {}", dirName, this.blueprintsDir);
 				continue;
 			}
-			BlueprintBundle bundle = loadBundleDirectory(dir, dirName);
+			BlueprintBundle bundle = loadBundleDirectory(dir, dirName, fixerUpper);
 			if (bundle != null) {
 				this.bundles.put(bundle.id(), bundle);
 			}
@@ -90,9 +90,10 @@ public final class BlueprintBundleRegistry {
 			);
 		} else {
 			OgskyCore.LOGGER.info(
-				"Loaded {} blueprint bundle(s); starter bundle '{}' ready (overworld=true, nether={}, end={}).",
+				"Loaded {} blueprint bundle(s) compressed in RAM; starter bundle '{}' ready (overworld=true [{} B], nether={}, end={}).",
 				this.bundles.size(),
 				defaultBundle.id(),
+				defaultBundle.overworld().compressedByteCount(),
 				defaultBundle.hasNether(),
 				defaultBundle.hasEnd()
 			);
@@ -122,24 +123,17 @@ public final class BlueprintBundleRegistry {
 			.toList();
 	}
 
-	public StructureTemplate loadTemplate(HolderGetter<Block> blockLookup, Path nbtFile) throws IOException {
+	public StructureTemplate decompressTemplate(HolderGetter<Block> blockLookup, CompressedBlueprint blueprint) throws IOException {
 		Objects.requireNonNull(blockLookup, "blockLookup");
-		Objects.requireNonNull(nbtFile, "nbtFile");
-		Path normalized = nbtFile.toAbsolutePath().normalize();
-		CompoundTag cached = this.cachedTags.get(normalized);
-		if (cached == null) {
-			cached = NbtIo.readCompressed(normalized, NbtAccounter.unlimitedHeap());
-			this.cachedTags.put(normalized, cached);
-		}
-		StructureTemplate template = new StructureTemplate();
-		template.load(blockLookup, cached);
-		return template;
+		Objects.requireNonNull(blueprint, "blueprint");
+		return blueprint.toStructureTemplate(blockLookup);
 	}
 
-	private @Nullable BlueprintBundle loadBundleDirectory(Path dir, String dirName) {
+	private @Nullable BlueprintBundle loadBundleDirectory(Path dir, String dirName, @Nullable DataFixer fixerUpper) {
 		BlueprintBundleMetadata metadata = null;
 		Path manifest = dir.resolve("bundle.json");
-		if (Files.isRegularFile(manifest)) {
+		boolean hasManifest = Files.isRegularFile(manifest);
+		if (hasManifest) {
 			try {
 				metadata = GSON.fromJson(Files.readString(manifest), BlueprintBundleMetadata.class);
 			} catch (Exception ex) {
@@ -156,13 +150,37 @@ public final class BlueprintBundleRegistry {
 			return null;
 		}
 
-		Path overworld = resolveExistingNbt(dir, metadata.overworld.file);
-		Path nether = resolveExistingNbt(dir, metadata.nether.file);
-		Path end = resolveExistingNbt(dir, metadata.end.file);
-		if (overworld == null && nether == null && end == null && !Files.isRegularFile(manifest)) {
+		CompressedBlueprint overworld = loadCompressedNbt(dir, metadata.id, metadata.overworld.file, fixerUpper);
+		CompressedBlueprint nether = loadCompressedNbt(dir, metadata.id, metadata.nether.file, fixerUpper);
+		CompressedBlueprint end = loadCompressedNbt(dir, metadata.id, metadata.end.file, fixerUpper);
+		if (overworld == null && nether == null && end == null && !hasManifest) {
 			return null;
 		}
 		return new BlueprintBundle(metadata.id, dir, metadata, overworld, nether, end);
+	}
+
+	private static @Nullable CompressedBlueprint loadCompressedNbt(
+		Path bundleDir,
+		String bundleId,
+		String relativeFile,
+		@Nullable DataFixer fixerUpper
+	) {
+		Path resolved = resolveExistingNbt(bundleDir, relativeFile);
+		if (resolved == null) {
+			return null;
+		}
+		try {
+			return CompressedBlueprint.fromFile(resolved, fixerUpper);
+		} catch (Exception ex) {
+			OgskyCore.LOGGER.error(
+				"Failed to read/compress blueprint NBT '{}' for bundle '{}': {}",
+				resolved,
+				bundleId,
+				ex.getMessage(),
+				ex
+			);
+			return null;
+		}
 	}
 
 	private static @Nullable Path resolveExistingNbt(Path bundleDir, String relativeFile) {

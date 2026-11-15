@@ -15,14 +15,15 @@ import java.util.Objects;
 
 /**
  * Validated in-memory descriptor for a per-island {@code .nbt} blueprint bundle.
+ * Stores eagerly loaded, GZIP-compressed {@link CompressedBlueprint} payloads directly in RAM.
  */
 public record BlueprintBundle(
 	String id,
 	Path directory,
 	BlueprintBundleMetadata metadata,
-	@Nullable Path overworldFile,
-	@Nullable Path netherFile,
-	@Nullable Path endFile
+	@Nullable CompressedBlueprint overworld,
+	@Nullable CompressedBlueprint nether,
+	@Nullable CompressedBlueprint end
 ) {
 	public BlueprintBundle {
 		Objects.requireNonNull(id, "id");
@@ -31,15 +32,15 @@ public record BlueprintBundle(
 	}
 
 	public boolean hasOverworld() {
-		return overworldFile != null;
+		return overworld != null;
 	}
 
 	public boolean hasNether() {
-		return netherFile != null;
+		return nether != null;
 	}
 
 	public boolean hasEnd() {
-		return endFile != null;
+		return end != null;
 	}
 
 	public BlueprintBundleView toView() {
@@ -57,16 +58,16 @@ public record BlueprintBundle(
 		);
 	}
 
-	public @Nullable Path fileFor(ResourceKey<Level> dimension) {
+	public @Nullable CompressedBlueprint blueprintFor(ResourceKey<Level> dimension) {
 		Objects.requireNonNull(dimension, "dimension");
 		if (dimension.equals(OgskyDimensions.OVERWORLD)) {
-			return overworldFile;
+			return overworld;
 		}
 		if (dimension.equals(OgskyDimensions.NETHER)) {
-			return netherFile;
+			return nether;
 		}
 		if (dimension.equals(OgskyDimensions.END)) {
-			return endFile;
+			return end;
 		}
 		return null;
 	}
@@ -88,24 +89,79 @@ public record BlueprintBundle(
 	public BlockPos computePasteOrigin(
 		IslandView island,
 		ResourceKey<Level> dimension,
+		CompressedBlueprint blueprint,
+		int defaultAnchorY,
+		int minLevelY,
+		int maxLevelY
+	) {
+		Objects.requireNonNull(blueprint, "blueprint");
+		return computePasteOrigin(
+			island,
+			dimension,
+			blueprint.size(),
+			blueprint.bedrockOffset(),
+			defaultAnchorY,
+			minLevelY,
+			maxLevelY
+		);
+	}
+
+	public BlockPos computePasteOrigin(
+		IslandView island,
+		ResourceKey<Level> dimension,
 		Vec3i templateSize,
-		int defaultSpawnY,
+		@Nullable BlockPos bedrockOffset,
+		int defaultAnchorY,
 		int minLevelY,
 		int maxLevelY
 	) {
 		BlueprintBundleMetadata.DimensionSpec spec = specFor(dimension);
-		int originX = island.centerX() + spec.offsetX;
-		int originZ = island.centerZ() + spec.offsetZ;
-		if (spec.centerHorizontally) {
-			originX -= templateSize.getX() / 2;
-			originZ -= templateSize.getZ() / 2;
-		}
 		int maxAllowedOriginY = Math.max(minLevelY, maxLevelY - Math.max(1, templateSize.getY()) + 1);
-		int originY = Math.clamp(defaultSpawnY + spec.offsetY, minLevelY, maxAllowedOriginY);
+		int originX;
+		int originY;
+		int originZ;
+		if (bedrockOffset != null) {
+			originX = (island.centerX() + spec.offsetX) - bedrockOffset.getX();
+			originZ = (island.centerZ() + spec.offsetZ) - bedrockOffset.getZ();
+			originY = Math.clamp((defaultAnchorY + spec.offsetY) - bedrockOffset.getY(), minLevelY, maxAllowedOriginY);
+		} else {
+			originX = island.centerX() + spec.offsetX;
+			originZ = island.centerZ() + spec.offsetZ;
+			if (spec.centerHorizontally) {
+				originX -= templateSize.getX() / 2;
+				originZ -= templateSize.getZ() / 2;
+			}
+			originY = Math.clamp(defaultAnchorY + spec.offsetY, minLevelY, maxAllowedOriginY);
+		}
 		return new BlockPos(originX, originY, originZ);
 	}
 
-	public RelativeSpawn computeSpawn(IslandView island, ResourceKey<Level> dimension, int defaultSpawnY) {
+	public RelativeSpawn computeSpawn(
+		IslandView island,
+		ResourceKey<Level> dimension,
+		@Nullable CompressedBlueprint blueprint,
+		BlockPos pasteOrigin,
+		int defaultSpawnY
+	) {
+		if (blueprint != null && blueprint.spawnMarker() != null) {
+			CompressedBlueprint.SpawnMarker marker = blueprint.spawnMarker();
+			BlockPos worldMarkerPos = pasteOrigin.offset(marker.blockPos());
+			int clampedX = Math.clamp(worldMarkerPos.getX(), island.minX(), island.maxX());
+			int clampedZ = Math.clamp(worldMarkerPos.getZ(), island.minZ(), island.maxZ());
+			return RelativeSpawn.fromAbsolute(
+				island.centerX(),
+				island.centerZ(),
+				clampedX + 0.5D,
+				worldMarkerPos.getY(),
+				clampedZ + 0.5D,
+				marker.yaw(),
+				marker.pitch()
+			);
+		}
+		return computeFallbackSpawn(island, dimension, defaultSpawnY);
+	}
+
+	public RelativeSpawn computeFallbackSpawn(IslandView island, ResourceKey<Level> dimension, int defaultSpawnY) {
 		BlueprintBundleMetadata.DimensionSpec spec = specFor(dimension);
 		int clampedX = Math.clamp(island.centerX() + spec.spawnOffsetX, island.minX(), island.maxX());
 		int clampedZ = Math.clamp(island.centerZ() + spec.spawnOffsetZ, island.minZ(), island.maxZ());

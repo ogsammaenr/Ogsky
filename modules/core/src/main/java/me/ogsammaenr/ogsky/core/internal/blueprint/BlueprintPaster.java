@@ -21,6 +21,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
+import net.minecraft.world.level.block.SignBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
@@ -29,6 +30,7 @@ import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemp
 import net.minecraft.world.level.storage.TagValueInput;
 import org.jspecify.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -101,6 +103,19 @@ public final class BlueprintPaster {
 		String bundleId,
 		@Nullable Runnable onComplete
 	) {
+		enqueuePaste(island, dimension, level, template, origin, bundleId, null, onComplete);
+	}
+
+	public void enqueuePaste(
+		Island island,
+		ResourceKey<Level> dimension,
+		ServerLevel level,
+		StructureTemplate template,
+		BlockPos origin,
+		String bundleId,
+		BlueprintSignSupport.@Nullable WelcomeContext welcomeContext,
+		@Nullable Runnable onComplete
+	) {
 		Objects.requireNonNull(island, "island");
 		Objects.requireNonNull(dimension, "dimension");
 		Objects.requireNonNull(level, "level");
@@ -108,7 +123,7 @@ public final class BlueprintPaster {
 		Objects.requireNonNull(origin, "origin");
 		Objects.requireNonNull(bundleId, "bundleId");
 
-		PasteJob job = buildJob(island, dimension, level, template, origin, bundleId, onComplete);
+		PasteJob job = buildJob(island, dimension, level, template, origin, bundleId, welcomeContext, onComplete);
 		island.setStateBit(Island.STATE_PASTING, true);
 		if (job.blocks().isEmpty()) {
 			finalizeJob(job);
@@ -125,6 +140,18 @@ public final class BlueprintPaster {
 		BlockPos origin,
 		String bundleId
 	) {
+		pasteImmediately(island, dimension, level, template, origin, bundleId, null);
+	}
+
+	public void pasteImmediately(
+		Island island,
+		ResourceKey<Level> dimension,
+		ServerLevel level,
+		StructureTemplate template,
+		BlockPos origin,
+		String bundleId,
+		BlueprintSignSupport.@Nullable WelcomeContext welcomeContext
+	) {
 		Objects.requireNonNull(island, "island");
 		Objects.requireNonNull(dimension, "dimension");
 		Objects.requireNonNull(level, "level");
@@ -132,7 +159,7 @@ public final class BlueprintPaster {
 		Objects.requireNonNull(origin, "origin");
 		Objects.requireNonNull(bundleId, "bundleId");
 
-		PasteJob job = buildJob(island, dimension, level, template, origin, bundleId, null);
+		PasteJob job = buildJob(island, dimension, level, template, origin, bundleId, welcomeContext, null);
 		try (ProblemReporter.ScopedCollector reporter = new ProblemReporter.ScopedCollector(OgskyCore.LOGGER)) {
 			HolderLookup.Provider registries = level.registryAccess();
 			List<StructureTemplate.StructureBlockInfo> blocks = job.blocks();
@@ -205,6 +232,7 @@ public final class BlueprintPaster {
 		StructureTemplate template,
 		BlockPos origin,
 		String bundleId,
+		BlueprintSignSupport.@Nullable WelcomeContext welcomeContext,
 		@Nullable Runnable onComplete
 	) {
 		BoundingBox clipBounds = new BoundingBox(
@@ -233,6 +261,18 @@ public final class BlueprintPaster {
 				settings.getRandomPalette(palettes, origin).blocks()
 			);
 
+		BlueprintSignSupport.WelcomeContext effectiveWelcome = welcomeContext != null
+			? welcomeContext
+			: new BlueprintSignSupport.WelcomeContext(
+				island.ownerId().toString().substring(0, 8),
+				bundleId,
+				bundleId,
+				island.islandId(),
+				island.gridX(),
+				island.gridZ()
+			);
+		List<StructureTemplate.StructureBlockInfo> preparedBlocks = prepareSignBlocks(processedBlocks, effectiveWelcome);
+
 		return new PasteJob(
 			island.islandId(),
 			dimension,
@@ -241,9 +281,36 @@ public final class BlueprintPaster {
 			origin,
 			clipBounds,
 			bundleId,
-			processedBlocks,
+			preparedBlocks,
 			onComplete
 		);
+	}
+
+	private List<StructureTemplate.StructureBlockInfo> prepareSignBlocks(
+		List<StructureTemplate.StructureBlockInfo> processedBlocks,
+		BlueprintSignSupport.WelcomeContext welcomeContext
+	) {
+		if (processedBlocks.isEmpty()) {
+			return processedBlocks;
+		}
+		List<StructureTemplate.StructureBlockInfo> prepared = new ArrayList<>(processedBlocks.size());
+		for (StructureTemplate.StructureBlockInfo info : processedBlocks) {
+			if (info.state().getBlock() instanceof SignBlock && info.nbt() != null) {
+				if (BlueprintSignSupport.isSpawnSign(info.nbt())) {
+					// [SPAWN] signs define spawnpoint + yaw only and must not be pasted into the world.
+					continue;
+				}
+				if (BlueprintSignSupport.hasWelcomeMarker(info.nbt())) {
+					BlueprintSignSupport.rewriteWelcomeSignNbt(
+						info.nbt(),
+						this.config.blueprints.welcomeSignLines,
+						welcomeContext
+					);
+				}
+			}
+			prepared.add(info);
+		}
+		return prepared;
 	}
 
 	private static boolean placeSingleBlock(
@@ -270,6 +337,7 @@ public final class BlueprintPaster {
 				}
 				blockEntity.loadWithComponents(TagValueInput.create(reporter.forChild(blockEntity.problemPath()), registries, info.nbt()));
 				blockEntity.setChanged();
+				level.sendBlockUpdated(pos, targetState, targetState, Block.UPDATE_ALL);
 			}
 		}
 		return true;

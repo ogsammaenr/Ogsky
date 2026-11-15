@@ -79,7 +79,7 @@ public final class OgskyCoreMod implements ModInitializer {
 			Path dataRoot = server.getWorldPath(LevelResource.ROOT).resolve("ogsky").resolve("data");
 			api.sqliteDatabases().openAllForRoot(dataRoot);
 			api.coreIslands().loadFromDatabase();
-			api.blueprints().onServerStarting();
+			api.blueprints().onServerStarting(server);
 			OgskyCore.LOGGER.info(
 				"Loaded {} Skyblock island(s) into RAM (cellSize={}, locked={}).",
 				api.coreIslands().islandCount(),
