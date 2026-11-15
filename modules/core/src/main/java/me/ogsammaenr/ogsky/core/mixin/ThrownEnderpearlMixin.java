@@ -34,9 +34,12 @@ public abstract class ThrownEnderpearlMixin {
 			return;
 		}
 		BlockPos landing = BlockPos.containing(self.oldPosition());
+		BlockPos hitPos = BlockPos.containing(hitResult.getLocation());
 		IslandView destIsland = resolver.islandAt(serverLevel, landing);
+		IslandView hitIsland = resolver.islandAt(serverLevel, hitPos);
 		boolean allowed = resolver.isPlayerAllowed(player, serverLevel, landing, BuiltinFlags.ENDER_PEARL)
-			&& (destIsland == null || resolver.canEnterIsland(destIsland, player));
+			&& (destIsland == null || resolver.canEnterIsland(destIsland, player))
+			&& (hitIsland == null || resolver.canEnterIsland(hitIsland, player));
 		if (!allowed) {
 			resolver.notifyDenied(player, "Ender pearl teleportation is protected at the destination.");
 			self.discard();

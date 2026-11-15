@@ -22,6 +22,7 @@ import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
@@ -30,11 +31,13 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.DamageTypeTags;
 import net.minecraft.tags.ItemTags;
+import net.minecraft.util.Mth;
 import net.minecraft.world.Container;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.Relative;
 import net.minecraft.world.entity.TamableAnimal;
 import net.minecraft.world.entity.ambient.AmbientCreature;
 import net.minecraft.world.entity.animal.Animal;
@@ -134,6 +137,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.portal.TeleportTransition;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
 import java.util.List;
@@ -154,6 +158,10 @@ public final class ProtectionListeners {
 	private final ProtectionResolver protection;
 	private final OgskyEventBus eventBus;
 	private final Map<UUID, UUID> lastPlayerIsland = new ConcurrentHashMap<>();
+	private final Map<UUID, SafePosition> lastOutsidePos = new ConcurrentHashMap<>();
+
+	private record SafePosition(ResourceKey<Level> dimension, Vec3 pos) {
+	}
 
 	public ProtectionListeners(
 		CoreConfig config,
@@ -182,11 +190,13 @@ public final class ProtectionListeners {
 
 	public void onPlayerDisconnect(UUID playerUuid) {
 		lastPlayerIsland.remove(playerUuid);
+		lastOutsidePos.remove(playerUuid);
 		protection.clearPlayerState(playerUuid);
 	}
 
 	public void clearTracking() {
 		lastPlayerIsland.clear();
+		lastOutsidePos.clear();
 		protection.clearAllState();
 	}
 
@@ -400,39 +410,38 @@ public final class ProtectionListeners {
 
 	private void tickPlayers(MinecraftServer server) {
 		for (ServerPlayer player : List.copyOf(server.getPlayerList().getPlayers())) {
+			UUID playerId = player.getUUID();
 			ServerLevel level = player.level();
 			ResourceKey<Level> dimension = level.dimension();
 			if (!OgskyDimensions.isSkyblockDimension(dimension)) {
-				UUID previousId = lastPlayerIsland.remove(player.getUUID());
+				lastOutsidePos.remove(playerId);
+				UUID previousId = lastPlayerIsland.remove(playerId);
 				if (previousId != null) {
-					eventBus.publish(new IslandExitEvent(previousId, player.getUUID()));
+					eventBus.publish(new IslandExitEvent(previousId, playerId));
 				}
 				continue;
 			}
 
 			if (handleVoidRescue(server, player, level, dimension)) {
+				lastOutsidePos.remove(playerId);
 				continue;
 			}
 
 			Island currentIsland = islandService.grid().findAt(player.getBlockX(), player.getBlockZ());
+			UUID previousId = lastPlayerIsland.get(playerId);
 			if (currentIsland != null && !protection.canEnterIsland(currentIsland, player)) {
-				String denyMsg = currentIsland.isBanned(player.getUUID())
+				String denyMsg = currentIsland.isBanned(playerId)
 					? "You are banned from this island."
 					: "This island is locked to visitors.";
 				protection.notifyDenied(player, denyMsg);
-				evictPlayer(server, player, currentIsland.islandId());
-				UUID previousId = lastPlayerIsland.remove(player.getUUID());
-				if (previousId != null) {
-					eventBus.publish(new IslandExitEvent(previousId, player.getUUID()));
-				}
+				denyIslandEntry(server, player, level, dimension, currentIsland, previousId);
 				continue;
 			}
 
 			UUID currentId = currentIsland == null ? null : currentIsland.islandId();
-			UUID previousId = lastPlayerIsland.get(player.getUUID());
 			if (!Objects.equals(previousId, currentId)) {
 				if (previousId != null) {
-					eventBus.publish(new IslandExitEvent(previousId, player.getUUID()));
+					eventBus.publish(new IslandExitEvent(previousId, playerId));
 					Island prevIsland = islandService.grid().findById(previousId).orElse(null);
 					if (prevIsland != null && prevIsland.isSettingEnabledBySlot(islandService.flagSlot(BuiltinFlags.ENTER_EXIT_MESSAGES))) {
 						player.sendSystemMessage(Component.literal("[Ogsky] Left island boundary.").withStyle(ChatFormatting.GRAY));
@@ -441,22 +450,106 @@ public final class ProtectionListeners {
 				if (currentId != null) {
 					boolean adminBypass = protection.hasEntryBypass(player);
 					boolean allowedByBus = protection.canEnterIsland(currentIsland, player)
-						&& (player.getUUID().equals(currentIsland.ownerId())
-							|| eventBus.publishCancellable(new IslandEnterEvent(currentId, player.getUUID(), adminBypass)));
+						&& (playerId.equals(currentIsland.ownerId())
+							|| eventBus.publishCancellable(new IslandEnterEvent(currentId, playerId, adminBypass)));
 					if (!allowedByBus) {
 						protection.notifyDenied(player, "You cannot enter this island.");
-						evictPlayer(server, player, currentId);
-						lastPlayerIsland.remove(player.getUUID());
+						denyIslandEntry(server, player, level, dimension, currentIsland, previousId);
 						continue;
 					}
-					lastPlayerIsland.put(player.getUUID(), currentId);
+					lastPlayerIsland.put(playerId, currentId);
 					if (currentIsland.isSettingEnabledBySlot(islandService.flagSlot(BuiltinFlags.ENTER_EXIT_MESSAGES))) {
 						player.sendSystemMessage(Component.literal("[Ogsky] Entered island.").withStyle(ChatFormatting.GREEN));
 					}
 				} else {
-					lastPlayerIsland.remove(player.getUUID());
+					lastPlayerIsland.remove(playerId);
 				}
 			}
+
+			if (currentIsland == null) {
+				lastOutsidePos.put(playerId, new SafePosition(dimension, player.position()));
+			}
+		}
+	}
+
+	private void denyIslandEntry(
+		MinecraftServer server,
+		ServerPlayer player,
+		ServerLevel level,
+		ResourceKey<Level> dimension,
+		Island deniedIsland,
+		@Nullable UUID previousIslandId
+	) {
+		UUID playerId = player.getUUID();
+		boolean wasAlreadyInside = deniedIsland.islandId().equals(previousIslandId);
+		if (!wasAlreadyInside) {
+			SafePosition safe = lastOutsidePos.get(playerId);
+			if (safe != null && safe.dimension().equals(dimension)) {
+				boolean verticalKnockback = !player.getAbilities().flying && !player.isFallFlying() && !player.isInWater();
+				BoundaryPushback.PushbackResult pushback = BoundaryPushback.compute(deniedIsland, safe.pos(), verticalKnockback);
+				if (pushback != null) {
+					Island pushTarget = islandService.grid().findAt(
+						Mth.floor(pushback.position().x),
+						Mth.floor(pushback.position().z)
+					);
+					if (pushTarget == null || protection.canEnterIsland(pushTarget, player)) {
+						applyBoundaryPushback(player, level, pushback);
+						lastOutsidePos.put(playerId, new SafePosition(dimension, pushback.position()));
+						if (previousIslandId != null) {
+							lastPlayerIsland.remove(playerId);
+							eventBus.publish(new IslandExitEvent(previousIslandId, playerId));
+						}
+						return;
+					}
+				}
+			}
+		}
+
+		evictPlayer(server, player, deniedIsland.islandId());
+		UUID removed = lastPlayerIsland.remove(playerId);
+		if (removed != null) {
+			eventBus.publish(new IslandExitEvent(removed, playerId));
+		}
+	}
+
+	private static void applyBoundaryPushback(
+		ServerPlayer player,
+		ServerLevel level,
+		BoundaryPushback.PushbackResult pushback
+	) {
+		Vec3 targetPos = pushback.position();
+		Vec3 knockback = pushback.knockback();
+		Entity rootVehicle = player.isPassenger() ? player.getRootVehicle() : null;
+		player.resetFallDistance();
+		player.teleport(new TeleportTransition(
+			level,
+			targetPos,
+			knockback,
+			0.0F,
+			0.0F,
+			Relative.ROTATION,
+			TeleportTransition.DO_NOTHING
+		));
+		player.setDeltaMovement(knockback);
+		player.needsSync = true;
+		player.syncVelocity = true;
+		if (player.connection != null) {
+			player.connection.send(new ClientboundSetEntityMotionPacket(player));
+		}
+		if (rootVehicle != null && rootVehicle != player && !rootVehicle.isRemoved()) {
+			rootVehicle.resetFallDistance();
+			rootVehicle.teleport(new TeleportTransition(
+				level,
+				targetPos,
+				knockback,
+				0.0F,
+				0.0F,
+				Relative.ROTATION,
+				TeleportTransition.DO_NOTHING
+			));
+			rootVehicle.setDeltaMovement(knockback);
+			rootVehicle.needsSync = true;
+			rootVehicle.syncVelocity = true;
 		}
 	}
 
@@ -492,6 +585,7 @@ public final class ProtectionListeners {
 	}
 
 	private void evictPlayer(MinecraftServer server, ServerPlayer player, UUID deniedIslandId) {
+		lastOutsidePos.remove(player.getUUID());
 		Optional<Island> primary = islandService.grid().findPrimaryIsland(player.getUUID());
 		if (primary.isPresent() && !primary.get().islandId().equals(deniedIslandId)) {
 			OperationResult<Void> home = lifecycleService.teleportHome(server, player, primary.get(), OgskyDimensions.OVERWORLD);
