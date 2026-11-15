@@ -1,0 +1,13 @@
+{
+  "type": "ogsky:nether",
+  "generator": {
+    "type": "ogsky:void",
+    "biome_source": {
+      "type": "minecraft:fixed",
+      "biome": "minecraft:nether_wastes"
+    },
+    "min_y": 0,
+    "height": 256,
+    "sea_level": 32
+  }
+}
