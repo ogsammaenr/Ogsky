@@ -1,6 +1,6 @@
 package me.ogsammaenr.ogsky.panel.mixin;
 
-import me.ogsammaenr.ogsky.panel.OgskyPanelMenu;
+import me.ogsammaenr.ogsky.panel.OgskyReadOnlyChestMenu;
 import net.minecraft.network.protocol.game.ServerboundContainerClickPacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.network.protocol.game.ServerboundSetCreativeModeSlotPacket;
@@ -15,8 +15,9 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Prevents client-side offhand/hotbar swap desyncs and Creative-mode panel icon spoofing while
- * {@link OgskyPanelMenu} is open or when a forged creative packet references a marked panel icon.
+ * Prevents client-side offhand/hotbar swap desyncs and Creative-mode icon spoofing while any
+ * {@link OgskyReadOnlyChestMenu} (main control panel or module custom GUI) is open or when a forged
+ * creative packet references a marked panel icon.
  */
 @Mixin(ServerGamePacketListenerImpl.class)
 public abstract class ServerGamePacketListenerImplMixin {
@@ -42,15 +43,15 @@ public abstract class ServerGamePacketListenerImplMixin {
 	private void ogsky$enforcePostClickResync(ServerboundContainerClickPacket packet, CallbackInfo ci) {
 		AbstractContainerMenu before = this.ogsky$preClickMenu;
 		this.ogsky$preClickMenu = null;
-		if (this.player.containerMenu instanceof OgskyPanelMenu panelMenu) {
+		if (this.player.containerMenu instanceof OgskyReadOnlyChestMenu panelMenu) {
 			if (panelMenu.consumeForceResync()) {
 				panelMenu.syncClientState(this.player, panelMenu.consumePendingHotbarResync());
 			}
 			return;
 		}
-		if (before instanceof OgskyPanelMenu) {
-			OgskyPanelMenu.scrubLeakedPanelItems(this.player.getInventory());
-			OgskyPanelMenu.syncPlayerInventoryAndOffhand(this.player, -1);
+		if (before instanceof OgskyReadOnlyChestMenu) {
+			OgskyReadOnlyChestMenu.scrubLeakedPanelItems(this.player.getInventory());
+			OgskyReadOnlyChestMenu.syncPlayerInventoryAndOffhand(this.player, -1);
 		}
 	}
 
@@ -64,7 +65,7 @@ public abstract class ServerGamePacketListenerImplMixin {
 		cancellable = true
 	)
 	private void ogsky$blockOffhandSwapWhilePanelOpen(ServerboundPlayerActionPacket packet, CallbackInfo ci) {
-		if (!(this.player.containerMenu instanceof OgskyPanelMenu panelMenu)) {
+		if (!(this.player.containerMenu instanceof OgskyReadOnlyChestMenu panelMenu)) {
 			return;
 		}
 		ServerboundPlayerActionPacket.Action action = packet.getAction();
@@ -86,14 +87,14 @@ public abstract class ServerGamePacketListenerImplMixin {
 		cancellable = true
 	)
 	private void ogsky$blockCreativePanelItemInjection(ServerboundSetCreativeModeSlotPacket packet, CallbackInfo ci) {
-		if (this.player.containerMenu instanceof OgskyPanelMenu panelMenu) {
+		if (this.player.containerMenu instanceof OgskyReadOnlyChestMenu panelMenu) {
 			panelMenu.syncClientState(this.player, -1);
 			ci.cancel();
 			return;
 		}
-		if (OgskyPanelMenu.hasPanelItemMarker(packet.itemStack())) {
-			OgskyPanelMenu.scrubLeakedPanelItems(this.player.getInventory());
-			OgskyPanelMenu.syncPlayerInventoryAndOffhand(this.player, -1);
+		if (OgskyReadOnlyChestMenu.hasPanelItemMarker(packet.itemStack())) {
+			OgskyReadOnlyChestMenu.scrubLeakedPanelItems(this.player.getInventory());
+			OgskyReadOnlyChestMenu.syncPlayerInventoryAndOffhand(this.player, -1);
 			ci.cancel();
 		}
 	}

@@ -15,6 +15,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.IntTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtIo;
+import net.minecraft.network.chat.Component;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -408,5 +409,30 @@ class PanelViewModelServiceTest {
 		} finally {
 			upgradedDbs.closeAll();
 		}
+	}
+
+	@Test
+	void islandSummaryIncludesContributedModuleLinesInSortOrder() throws Exception {
+		createDummyBundle("default", false);
+		UUID ownerId = UUID.randomUUID();
+		IslandView island = createIsland(ownerId, "default");
+
+		core.guis().registerSummaryContributor(
+			OgskyCore.id("second_metric"),
+			20,
+			ctx -> List.of(Component.literal("Rank: #3"))
+		);
+		core.guis().registerSummaryContributor(
+			OgskyCore.id("first_metric"),
+			10,
+			ctx -> List.of(Component.literal("Level: 42 (" + ctx.viewerRole() + ")"))
+		);
+
+		PanelSnapshot snapshot = viewModels.buildSnapshot(island.islandId());
+		assertNotNull(snapshot.island());
+		assertEquals(
+			List.of("Level: 42 (" + IslandRole.OWNER + ")", "Rank: #3"),
+			snapshot.island().contributedLines().stream().map(Component::getString).toList()
+		);
 	}
 }

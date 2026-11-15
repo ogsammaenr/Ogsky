@@ -2,6 +2,7 @@ package me.ogsammaenr.ogsky.panel;
 
 import me.ogsammaenr.ogsky.core.api.action.IslandActionDescriptor;
 import me.ogsammaenr.ogsky.core.api.flag.FlagMode;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import org.jspecify.annotations.Nullable;
 
@@ -82,8 +83,56 @@ public record PanelSnapshot(
 		boolean deleting,
 		boolean locked,
 		int memberCount,
-		int bannedCount
+		int bannedCount,
+		List<Component> contributedLines
 	) {
+		public IslandSummary {
+			contributedLines = contributedLines == null ? List.of() : List.copyOf(contributedLines);
+		}
+
+		public IslandSummary(
+			UUID islandId,
+			UUID ownerId,
+			String ownerName,
+			int gridX,
+			int gridZ,
+			int centerX,
+			int centerZ,
+			short halfSize,
+			String bundleId,
+			Instant createdAt,
+			boolean overworldReady,
+			boolean netherReady,
+			boolean endReady,
+			boolean pasting,
+			boolean deleting,
+			boolean locked,
+			int memberCount,
+			int bannedCount
+		) {
+			this(
+				islandId,
+				ownerId,
+				ownerName,
+				gridX,
+				gridZ,
+				centerX,
+				centerZ,
+				halfSize,
+				bundleId,
+				createdAt,
+				overworldReady,
+				netherReady,
+				endReady,
+				pasting,
+				deleting,
+				locked,
+				memberCount,
+				bannedCount,
+				List.of()
+			);
+		}
+
 		public int sideLength() {
 			return halfSize * 2 + 1;
 		}

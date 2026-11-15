@@ -6,10 +6,12 @@ import me.ogsammaenr.ogsky.core.api.action.IslandActionDescriptor;
 import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintBundleView;
 import me.ogsammaenr.ogsky.core.api.flag.FlagType;
 import me.ogsammaenr.ogsky.core.api.flag.IslandFlagDefinition;
+import me.ogsammaenr.ogsky.core.api.gui.IslandSummaryContext;
 import me.ogsammaenr.ogsky.core.api.island.IslandMemberEntry;
 import me.ogsammaenr.ogsky.core.api.island.IslandRole;
 import me.ogsammaenr.ogsky.core.api.island.IslandService;
 import me.ogsammaenr.ogsky.core.api.island.IslandView;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
@@ -108,7 +110,9 @@ public final class PanelViewModelService {
 		IslandService islands = core.islands();
 		IslandView island = islandId == null ? null : islands.findById(islandId).orElse(null);
 		byte viewerRole = island == null ? IslandRole.VISITOR : island.roleOf(viewerUuid);
-		PanelSnapshot.IslandSummary summary = island == null ? null : buildSummary(island, playerNameResolver);
+		PanelSnapshot.IslandSummary summary = island == null
+			? null
+			: buildSummary(island, viewerUuid, viewerRole, viewerAdminBypass, playerNameResolver);
 
 		return switch (activeTab) {
 			case ACTIONS -> {
@@ -243,10 +247,19 @@ public final class PanelViewModelService {
 		return PanelSnapshot.ActionEntry.fromDescriptor(descriptor);
 	}
 
-	private PanelSnapshot.IslandSummary buildSummary(IslandView island, Function<UUID, String> playerNameResolver) {
+	private PanelSnapshot.IslandSummary buildSummary(
+		IslandView island,
+		UUID viewerUuid,
+		byte viewerRole,
+		boolean viewerAdminBypass,
+		Function<UUID, String> playerNameResolver
+	) {
 		boolean locked = core.flags().find(ISLAND_LOCK_FLAG)
 			.map(def -> island.isSettingEnabled(def.id()))
 			.orElse(false);
+		List<Component> contributedLines = core.guis().collectSummaryLines(
+			new IslandSummaryContext(island.islandId(), viewerUuid, viewerRole, viewerAdminBypass)
+		);
 		return new PanelSnapshot.IslandSummary(
 			island.islandId(),
 			island.ownerId(),
@@ -265,7 +278,8 @@ public final class PanelViewModelService {
 			island.isDeleting(),
 			locked,
 			island.members().size(),
-			island.bannedPlayers().size()
+			island.bannedPlayers().size(),
+			contributedLines
 		);
 	}
 

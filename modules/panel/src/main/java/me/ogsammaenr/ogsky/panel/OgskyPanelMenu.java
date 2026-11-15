@@ -5,31 +5,15 @@ import me.ogsammaenr.ogsky.core.api.island.IslandRole;
 import me.ogsammaenr.ogsky.panel.PanelController.ConfirmKind;
 import me.ogsammaenr.ogsky.panel.PanelController.PendingConfirmation;
 import net.minecraft.ChatFormatting;
-import net.minecraft.core.component.DataComponents;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.MutableComponent;
-import net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket;
-import net.minecraft.network.protocol.game.ClientboundSetCursorItemPacket;
-import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
-import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.inventory.ContainerInput;
-import net.minecraft.world.inventory.InventoryMenu;
-import net.minecraft.world.inventory.MenuType;
-import net.minecraft.world.inventory.Slot;
-import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.item.component.CustomData;
-import net.minecraft.world.item.component.ItemLore;
-import net.minecraft.world.item.component.ResolvableProfile;
-import net.minecraft.world.item.component.TooltipDisplay;
 import org.jspecify.annotations.Nullable;
 
 import java.time.ZoneOffset;
@@ -37,42 +21,22 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Server-side 6-row vanilla {@link ChestMenu} rendering {@link PanelSnapshot} state.
- * Strictly read-only across all slots and immune to vanilla container transfer/swap/dupe clicks.
+ * Server-side 6-row vanilla {@link net.minecraft.world.inventory.ChestMenu} rendering {@link PanelSnapshot} state.
  */
-public final class OgskyPanelMenu extends ChestMenu {
-	public static final int ROWS = 6;
+public final class OgskyPanelMenu extends OgskyReadOnlyChestMenu {
+	public static final int ROWS = DEFAULT_ROWS;
 	public static final int MENU_SIZE = ROWS * 9;
 	public static final int SLOT_LOCK_STATUS = 7;
 	public static final int SLOT_ISLAND_SUMMARY = 8;
-	public static final int SLOT_CLOSE = 45;
-	public static final int SLOT_CONTEXT_CONTROL = 47;
-	public static final int SLOT_PREV_PAGE = 48;
-	public static final int SLOT_PAGE_INDICATOR = 49;
-	public static final int SLOT_NEXT_PAGE = 50;
-	public static final int SLOT_REFRESH = 53;
-
-	public static final int[] CONTENT_SLOTS = {
-		10, 11, 12, 13, 14, 15, 16,
-		19, 20, 21, 22, 23, 24, 25,
-		28, 29, 30, 31, 32, 33, 34,
-		37, 38, 39, 40, 41, 42, 43
-	};
-
-	private static final String PANEL_ITEM_MARKER_KEY = "ogsky_panel_item";
 
 	private static final DateTimeFormatter DATE_FORMATTER =
 		DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").withZone(ZoneOffset.UTC);
 
 	private final PanelController controller;
-	private final ServerPlayer viewer;
 	private PanelSnapshot snapshot;
-	private boolean forceResyncAfterClick;
-	private int pendingHotbarResync = -1;
 
 	public OgskyPanelMenu(
 		int containerId,
@@ -80,41 +44,15 @@ public final class OgskyPanelMenu extends ChestMenu {
 		PanelController controller,
 		PanelSnapshot initialSnapshot
 	) {
-		super(MenuType.GENERIC_9x6, containerId, playerInventory, new SimpleContainer(MENU_SIZE), ROWS);
+		super(containerId, playerInventory, ROWS);
 		this.controller = Objects.requireNonNull(controller, "controller");
-		if (!(playerInventory.player instanceof ServerPlayer serverPlayer)) {
-			throw new IllegalStateException("OgskyPanelMenu requires a ServerPlayer inventory.");
-		}
-		this.viewer = serverPlayer;
 		this.snapshot = Objects.requireNonNull(initialSnapshot, "initialSnapshot");
 		this.controller.registerOpenMenu(this);
-		renderSnapshot(initialSnapshot, serverPlayer.level().getServer(), null);
-	}
-
-	@Override
-	protected Slot addSlot(Slot slot) {
-		int nextIndex = this.slots.size();
-		if (nextIndex < MENU_SIZE) {
-			return super.addSlot(new ReadOnlySlot(slot.container, nextIndex, slot.x, slot.y));
-		}
-		return super.addSlot(slot);
-	}
-
-	public ServerPlayer viewer() {
-		return viewer;
+		renderSnapshot(initialSnapshot, viewer().level().getServer(), null);
 	}
 
 	public PanelSnapshot snapshot() {
 		return snapshot;
-	}
-
-	public int contentIndexForSlot(int slotIndex) {
-		for (int i = 0; i < CONTENT_SLOTS.length; i++) {
-			if (CONTENT_SLOTS[i] == slotIndex) {
-				return i;
-			}
-		}
-		return -1;
 	}
 
 	public void renderSnapshot(
@@ -124,10 +62,7 @@ public final class OgskyPanelMenu extends ChestMenu {
 	) {
 		this.snapshot = Objects.requireNonNull(nextSnapshot, "nextSnapshot");
 		Container container = getContainer();
-		ItemStack filler = createFillerPane();
-		for (int i = 0; i < MENU_SIZE; i++) {
-			container.setItem(i, filler.copy());
-		}
+		fillBackground(container);
 
 		renderTabBar(container, server);
 		renderContent(container, server, pendingConfirm);
@@ -213,6 +148,7 @@ public final class OgskyPanelMenu extends ChestMenu {
 			ChatFormatting.DARK_AQUA
 		));
 		lore.add(line("Created: " + DATE_FORMATTER.format(summary.createdAt()), ChatFormatting.DARK_GRAY));
+		lore.addAll(summary.contributedLines());
 		lore.add(line("Click to open Blueprints & Info", ChatFormatting.YELLOW));
 		return buildPlayerHead(
 			server,
@@ -509,133 +445,13 @@ public final class OgskyPanelMenu extends ChestMenu {
 	}
 
 	@Override
-	public void clicked(int slotIndex, int buttonNum, ContainerInput containerInput, Player player) {
-		setCarried(ItemStack.EMPTY);
-		if (!(player instanceof ServerPlayer serverPlayer)) {
-			return;
-		}
-		boolean validPanelSlot = slotIndex >= 0 && slotIndex < MENU_SIZE;
-		boolean validAction = containerInput == ContainerInput.PICKUP || containerInput == ContainerInput.QUICK_MOVE;
-		boolean validButton = buttonNum == 0 || buttonNum == 1;
-		if (!validPanelSlot || !validAction || !validButton) {
-			int hotbarSlot = containerInput == ContainerInput.SWAP
-				&& buttonNum >= 0
-				&& buttonNum < Inventory.getSelectionSize()
-				? buttonNum
-				: -1;
-			this.forceResyncAfterClick = true;
-			this.pendingHotbarResync = hotbarSlot;
-			syncClientState(serverPlayer, hotbarSlot);
-			return;
-		}
-		controller.handleClick(this, serverPlayer, slotIndex, buttonNum, containerInput);
-		setCarried(ItemStack.EMPTY);
-		if (serverPlayer.containerMenu == this) {
-			broadcastChanges();
-			if (containerInput == ContainerInput.QUICK_MOVE) {
-				// Vanilla clients predictively transfer slot contents into player inventory on Shift-Click.
-				this.forceResyncAfterClick = true;
-			}
-		}
-	}
-
-	public boolean consumeForceResync() {
-		boolean resync = this.forceResyncAfterClick;
-		this.forceResyncAfterClick = false;
-		return resync;
-	}
-
-	public int consumePendingHotbarResync() {
-		int hotbar = this.pendingHotbarResync;
-		this.pendingHotbarResync = -1;
-		return hotbar;
-	}
-
-	/**
-	 * Immediately resynchronizes the panel container, cursor item, offhand slot, and player inventory.
-	 */
-	public void syncClientState(ServerPlayer serverPlayer, int swappedHotbarSlot) {
-		setCarried(ItemStack.EMPTY);
-		scrubLeakedPanelItems(serverPlayer.getInventory());
-		if (serverPlayer.connection != null && !serverPlayer.hasDisconnected()) {
-			this.sendAllDataToRemote();
-			syncPlayerInventoryAndOffhand(serverPlayer, swappedHotbarSlot);
-		}
-	}
-
-	/**
-	 * Forces client-side resync of cursor, offhand (Inventory slot 40 &amp; InventoryMenu slot 45),
-	 * optional hotbar slot, and player inventory contents.
-	 */
-	public static void syncPlayerInventoryAndOffhand(ServerPlayer serverPlayer, int swappedHotbarSlot) {
-		if (serverPlayer.connection == null || serverPlayer.hasDisconnected()) {
-			return;
-		}
-		serverPlayer.connection.send(new ClientboundSetCursorItemPacket(ItemStack.EMPTY));
-		serverPlayer.connection.send(serverPlayer.getInventory().createInventoryUpdatePacket(Inventory.SLOT_OFFHAND));
-		serverPlayer.connection.send(new ClientboundContainerSetSlotPacket(
-			serverPlayer.inventoryMenu.containerId,
-			serverPlayer.inventoryMenu.incrementStateId(),
-			InventoryMenu.SHIELD_SLOT,
-			serverPlayer.getInventory().getItem(Inventory.SLOT_OFFHAND).copy()
-		));
-		if (swappedHotbarSlot >= 0 && swappedHotbarSlot < Inventory.getSelectionSize()) {
-			serverPlayer.connection.send(serverPlayer.getInventory().createInventoryUpdatePacket(swappedHotbarSlot));
-		}
-		serverPlayer.inventoryMenu.sendAllDataToRemote();
-	}
-
-	/**
-	 * Clears any server-side inventory stacks stamped with the internal panel icon marker.
-	 */
-	public static boolean scrubLeakedPanelItems(Inventory inventory) {
-		boolean scrubbed = false;
-		int size = inventory.getContainerSize();
-		for (int i = 0; i < size; i++) {
-			if (hasPanelItemMarker(inventory.getItem(i))) {
-				inventory.setItem(i, ItemStack.EMPTY);
-				scrubbed = true;
-			}
-		}
-		if (scrubbed) {
-			inventory.setChanged();
-		}
-		return scrubbed;
-	}
-
-	public static boolean hasPanelItemMarker(ItemStack stack) {
-		if (stack == null || stack.isEmpty()) {
-			return false;
-		}
-		CustomData customData = stack.get(DataComponents.CUSTOM_DATA);
-		return customData != null && customData.copyTag().getBooleanOr(PANEL_ITEM_MARKER_KEY, false);
-	}
-
-	private static ItemStack markPanelItem(ItemStack stack) {
-		if (!stack.isEmpty()) {
-			CustomData.update(DataComponents.CUSTOM_DATA, stack, tag -> tag.putBoolean(PANEL_ITEM_MARKER_KEY, true));
-		}
-		return stack;
+	protected void onMenuSlotClick(ServerPlayer player, int slotIndex, int buttonNum, ContainerInput containerInput) {
+		controller.handleClick(this, player, slotIndex, buttonNum, containerInput);
 	}
 
 	@Override
-	public ItemStack quickMoveStack(Player player, int slotIndex) {
-		return ItemStack.EMPTY;
-	}
-
-	@Override
-	public boolean canDragTo(Slot slot) {
-		return false;
-	}
-
-	@Override
-	public boolean canTakeItemForPickAll(ItemStack carried, Slot target) {
-		return false;
-	}
-
-	@Override
-	public void setSelectedBundleItemIndex(int slotIndex, int selectedItemIndex) {
-		// Prevent client bundle index updates on read-only panel icons.
+	protected void onMenuClosed(Player player) {
+		controller.onMenuClosed(this);
 	}
 
 	@Override
@@ -647,18 +463,6 @@ public final class OgskyPanelMenu extends ChestMenu {
 		return islandId == null || controller.isViewerAllowed(islandId, player.getUUID());
 	}
 
-	@Override
-	public void removed(Player player) {
-		setCarried(ItemStack.EMPTY);
-		getContainer().clearContent();
-		controller.onMenuClosed(this);
-		super.removed(player);
-		if (player instanceof ServerPlayer serverPlayer && serverPlayer.isAlive()) {
-			scrubLeakedPanelItems(serverPlayer.getInventory());
-			syncPlayerInventoryAndOffhand(serverPlayer, -1);
-		}
-	}
-
 	private static boolean isPending(
 		@Nullable PendingConfirmation pendingConfirm,
 		ConfirmKind kind,
@@ -668,54 +472,6 @@ public final class OgskyPanelMenu extends ChestMenu {
 			&& !pendingConfirm.isExpired()
 			&& pendingConfirm.kind() == kind
 			&& pendingConfirm.targetKey().equals(targetKey);
-	}
-
-	private static ItemStack createFillerPane() {
-		ItemStack stack = new ItemStack(Items.STAINED_GLASS_PANE.gray());
-		stack.set(DataComponents.CUSTOM_NAME, Component.literal(" "));
-		stack.set(DataComponents.TOOLTIP_DISPLAY, new TooltipDisplay(true, TooltipDisplay.DEFAULT.hiddenComponents()));
-		return markPanelItem(stack);
-	}
-
-	private static ItemStack buildItem(String itemId, Component name, List<Component> lore, boolean glint) {
-		Identifier parsed = Identifier.tryParse(itemId);
-		Item resolved = parsed == null ? Items.PAPER : BuiltInRegistries.ITEM.getOptional(parsed).orElse(Items.PAPER);
-		return buildItem(resolved, name, lore, glint);
-	}
-
-	private static ItemStack buildItem(Item item, Component name, List<Component> lore, boolean glint) {
-		ItemStack stack = new ItemStack(item);
-		stack.set(DataComponents.CUSTOM_NAME, name);
-		if (!lore.isEmpty()) {
-			stack.set(DataComponents.LORE, new ItemLore(lore));
-		}
-		if (glint) {
-			stack.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true);
-		}
-		return markPanelItem(stack);
-	}
-
-	private static ItemStack buildPlayerHead(
-		MinecraftServer server,
-		UUID targetUuid,
-		Component name,
-		List<Component> lore,
-		boolean glint
-	) {
-		ItemStack stack = buildItem(Items.PLAYER_HEAD, name, lore, glint);
-		ServerPlayer online = server.getPlayerList().getPlayer(targetUuid);
-		ResolvableProfile profile = online != null
-			? ResolvableProfile.createResolved(online.getGameProfile())
-			: ResolvableProfile.createUnresolved(targetUuid);
-		stack.set(DataComponents.PROFILE, profile);
-		stack.set(DataComponents.TOOLTIP_DISPLAY, TooltipDisplay.DEFAULT.withHidden(DataComponents.PROFILE, true));
-		return stack;
-	}
-
-	private static MutableComponent line(String text, ChatFormatting formatting) {
-		return Component.literal(text)
-			.withStyle(formatting)
-			.withStyle(style -> style.withItalic(false));
 	}
 
 	private static String modeLabel(FlagMode mode) {
@@ -736,49 +492,5 @@ public final class OgskyPanelMenu extends ChestMenu {
 			case IslandRole.OWNER -> ChatFormatting.RED;
 			default -> ChatFormatting.DARK_RED;
 		};
-	}
-
-	/**
-	 * Unmodifiable panel container slot blocking all vanilla transfers or item pickups.
-	 */
-	private static final class ReadOnlySlot extends Slot {
-		private ReadOnlySlot(Container container, int slot, int x, int y) {
-			super(container, slot, x, y);
-		}
-
-		@Override
-		public boolean mayPlace(ItemStack stack) {
-			return false;
-		}
-
-		@Override
-		public boolean mayPickup(Player player) {
-			return false;
-		}
-
-		@Override
-		public boolean allowModification(Player player) {
-			return false;
-		}
-
-		@Override
-		public Optional<ItemStack> tryRemove(int amount, int maxAmount, Player player) {
-			return Optional.empty();
-		}
-
-		@Override
-		public ItemStack safeTake(int amount, int maxAmount, Player player) {
-			return ItemStack.EMPTY;
-		}
-
-		@Override
-		public ItemStack safeClone(Player player) {
-			return ItemStack.EMPTY;
-		}
-
-		@Override
-		public ItemStack safeInsert(ItemStack stack, int amount) {
-			return stack;
-		}
 	}
 }
