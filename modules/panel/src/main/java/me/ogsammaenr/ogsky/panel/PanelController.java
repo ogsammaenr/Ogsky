@@ -6,6 +6,7 @@ import me.ogsammaenr.ogsky.core.api.action.IslandActionDescriptor;
 import me.ogsammaenr.ogsky.core.api.event.IslandBanEvent;
 import me.ogsammaenr.ogsky.core.api.event.IslandDeletedEvent;
 import me.ogsammaenr.ogsky.core.api.event.IslandDimensionInitEvent;
+import me.ogsammaenr.ogsky.core.api.event.IslandLevelCalculatedEvent;
 import me.ogsammaenr.ogsky.core.api.event.IslandLockChangedEvent;
 import me.ogsammaenr.ogsky.core.api.event.IslandProtectionFlagChangedEvent;
 import me.ogsammaenr.ogsky.core.api.event.IslandRangeChangeEvent;
@@ -83,6 +84,7 @@ public final class PanelController {
 		bus.subscribe(IslandLockChangedEvent.class, e -> scheduleIslandRefresh(e.islandId()));
 		bus.subscribe(IslandRangeChangeEvent.class, e -> scheduleIslandRefresh(e.islandId()));
 		bus.subscribe(IslandDimensionInitEvent.class, e -> scheduleIslandRefresh(e.islandId()));
+		bus.subscribe(IslandLevelCalculatedEvent.class, e -> scheduleIslandRefresh(e.islandId()));
 		bus.subscribe(IslandUnbanEvent.class, e -> scheduleIslandRefresh(e.islandId()));
 		bus.subscribe(TeamJoinEvent.class, e -> scheduleIslandRefresh(e.islandId()));
 		bus.subscribe(IslandBanEvent.class, e -> {
