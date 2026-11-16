@@ -6,6 +6,7 @@ import me.ogsammaenr.ogsky.core.internal.command.OgskyCommands;
 import me.ogsammaenr.ogsky.core.internal.config.CoreConfig;
 import me.ogsammaenr.ogsky.core.internal.config.CoreConfigLoader;
 import me.ogsammaenr.ogsky.core.internal.island.CoreIslandRepository;
+import me.ogsammaenr.ogsky.core.internal.mutation.CoreWorldMutationService;
 import me.ogsammaenr.ogsky.core.internal.protection.ProtectionResolver;
 import me.ogsammaenr.ogsky.core.internal.world.PortalRouter;
 import me.ogsammaenr.ogsky.core.internal.world.VoidChunkGenerator;
@@ -76,6 +77,7 @@ public final class OgskyCoreMod implements ModInitializer {
 		api.protectionListeners().registerAll();
 
 		ServerLifecycleEvents.SERVER_STARTING.register(server -> {
+			CoreWorldMutationService.setActive(api.mutationService());
 			Path dataRoot = server.getWorldPath(LevelResource.ROOT).resolve("ogsky").resolve("data");
 			api.sqliteDatabases().openAllForRoot(dataRoot);
 			api.coreIslands().loadFromDatabase();
@@ -107,6 +109,7 @@ public final class OgskyCoreMod implements ModInitializer {
 		});
 
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+			CoreWorldMutationService.setActive(null);
 			api.protectionListeners().clearTracking();
 			commands.clearAllState();
 			api.coreIslands().clear();

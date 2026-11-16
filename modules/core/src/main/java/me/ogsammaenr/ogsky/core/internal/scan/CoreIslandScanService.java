@@ -2,6 +2,7 @@ package me.ogsammaenr.ogsky.core.internal.scan;
 
 import me.ogsammaenr.ogsky.core.api.OgskyCore;
 import me.ogsammaenr.ogsky.core.api.scan.BlockStateCountConsumer;
+import me.ogsammaenr.ogsky.core.api.scan.EntityTypeCountConsumer;
 import me.ogsammaenr.ogsky.core.api.scan.IslandScanOptions;
 import me.ogsammaenr.ogsky.core.api.scan.IslandScanResult;
 import me.ogsammaenr.ogsky.core.api.scan.IslandScanService;
@@ -9,14 +10,23 @@ import me.ogsammaenr.ogsky.core.api.world.OgskyDimensionKeys;
 import me.ogsammaenr.ogsky.core.internal.island.CoreIslandService;
 import me.ogsammaenr.ogsky.core.internal.island.Island;
 import me.ogsammaenr.ogsky.core.mixin.ChunkMapAccessor;
+import me.ogsammaenr.ogsky.core.mixin.EntityStorageAccessor;
+import me.ogsammaenr.ogsky.core.mixin.PersistentEntityManagerAccessor;
+import me.ogsammaenr.ogsky.core.mixin.ServerLevelEntityAccessor;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.SectionPos;
+import net.minecraft.core.UUIDUtil;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ChunkHolder;
 import net.minecraft.server.level.ChunkMap;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
@@ -24,15 +34,21 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
+import net.minecraft.world.level.chunk.storage.EntityStorage;
 import net.minecraft.world.level.chunk.storage.SerializableChunkData;
+import net.minecraft.world.level.chunk.storage.SimpleRegionStorage;
+import net.minecraft.world.level.entity.EntitySectionStorage;
+import net.minecraft.world.level.entity.PersistentEntitySectionManager;
 import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -55,6 +71,17 @@ public final class CoreIslandScanService implements IslandScanService {
 		UUID islandId,
 		IslandScanOptions options,
 		BlockStateCountConsumer consumer
+	) {
+		return scanIslandWithEntities(server, islandId, options, consumer, null);
+	}
+
+	@Override
+	public CompletableFuture<IslandScanResult> scanIslandWithEntities(
+		MinecraftServer server,
+		UUID islandId,
+		IslandScanOptions options,
+		BlockStateCountConsumer consumer,
+		@Nullable EntityTypeCountConsumer entityConsumer
 	) {
 		Objects.requireNonNull(server, "server");
 		Objects.requireNonNull(islandId, "islandId");
@@ -89,6 +116,7 @@ public final class CoreIslandScanService implements IslandScanService {
 			island.maxZ(),
 			options,
 			consumer,
+			entityConsumer,
 			targets,
 			future
 		);
@@ -134,6 +162,10 @@ public final class CoreIslandScanService implements IslandScanService {
 	}
 
 	private boolean tickSingleJob(MinecraftServer server, ScanJob job) {
+		if (job.future.isCancelled()) {
+			job.completeAborted("Scan cancelled.");
+			return true;
+		}
 		Optional<Island> maybeIsland = islandService.grid().findById(job.islandId);
 		if (maybeIsland.isEmpty()) {
 			job.completeAborted("Island was deleted during scan.");
@@ -214,11 +246,204 @@ public final class CoreIslandScanService implements IslandScanService {
 			job.inFlightReads.addLast(new InFlightRead(target.dimension, target.chunkX, target.chunkZ, readFuture));
 		}
 
-		if (job.nextTargetIndex >= job.targets.size() && job.inFlightReads.isEmpty()) {
+		// 3. Process entity chunks (live EntitySectionStorage + async unloaded entities/*.mca NBT reads).
+		if (job.entityConsumer != null) {
+			while (!job.inFlightEntityReads.isEmpty()) {
+				InFlightRead head = job.inFlightEntityReads.peekFirst();
+				InFlightRead ready = (head != null && head.readFuture.isDone())
+					? job.inFlightEntityReads.pollFirst()
+					: pollAnyCompleted(job.inFlightEntityReads);
+				if (ready == null) {
+					break;
+				}
+				processCompletedEntityDiskRead(server, job, ready);
+				chunksThisTick++;
+				if (chunksThisTick >= job.options.chunksPerTick() || System.nanoTime() >= deadlineNanos) {
+					return false;
+				}
+			}
+
+			while (job.nextEntityTargetIndex < job.targets.size()) {
+				if (chunksThisTick >= job.options.chunksPerTick() || System.nanoTime() >= deadlineNanos) {
+					break;
+				}
+				ChunkTarget target = job.targets.get(job.nextEntityTargetIndex);
+				ServerLevel level = server.getLevel(target.dimension);
+				if (level == null) {
+					job.nextEntityTargetIndex++;
+					continue;
+				}
+
+				PersistentEntitySectionManager<Entity> entityManager = ((ServerLevelEntityAccessor) level).ogsky$getEntityManager();
+				long chunkKey = ChunkPos.pack(target.chunkX, target.chunkZ);
+				if (entityManager.areEntitiesLoaded(chunkKey)) {
+					job.nextEntityTargetIndex++;
+					scanLiveEntitySections(entityManager, chunkKey, job, null);
+					chunksThisTick++;
+					continue;
+				}
+
+				if (!job.options.includeUnloadedChunks()) {
+					job.nextEntityTargetIndex++;
+					scanLiveEntitySections(entityManager, chunkKey, job, null);
+					chunksThisTick++;
+					continue;
+				}
+
+				@SuppressWarnings("unchecked")
+				SimpleRegionStorage regionStorage = entityRegionStorage(entityManager);
+				if (regionStorage == null) {
+					job.nextEntityTargetIndex++;
+					scanLiveEntitySections(entityManager, chunkKey, job, null);
+					chunksThisTick++;
+					continue;
+				}
+
+				if (job.inFlightEntityReads.size() >= job.options.maxInFlightDiskReads()) {
+					break;
+				}
+
+				job.nextEntityTargetIndex++;
+				ChunkPos pos = new ChunkPos(target.chunkX, target.chunkZ);
+				CompletableFuture<Optional<CompoundTag>> entityFuture = regionStorage.read(pos)
+					.exceptionally(ex -> {
+						OgskyCore.LOGGER.warn("Failed disk entity read at {} ({}): {}", pos, target.dimension.identifier(), ex.toString());
+						return Optional.empty();
+					});
+				job.inFlightEntityReads.addLast(new InFlightRead(target.dimension, target.chunkX, target.chunkZ, entityFuture));
+			}
+		}
+
+		boolean blocksDone = job.nextTargetIndex >= job.targets.size() && job.inFlightReads.isEmpty();
+		boolean entitiesDone = job.entityConsumer == null
+			|| (job.nextEntityTargetIndex >= job.targets.size() && job.inFlightEntityReads.isEmpty());
+		if (blocksDone && entitiesDone) {
 			job.completeSuccess();
 			return true;
 		}
 		return false;
+	}
+
+	private static @Nullable SimpleRegionStorage entityRegionStorage(PersistentEntitySectionManager<Entity> entityManager) {
+		var permanentStorage = ((PersistentEntityManagerAccessor<?>) entityManager).ogsky$getPermanentStorage();
+		if (permanentStorage instanceof EntityStorage entityStorage) {
+			return ((EntityStorageAccessor) entityStorage).ogsky$getSimpleRegionStorage();
+		}
+		return null;
+	}
+
+	@SuppressWarnings("unchecked")
+	private static void scanLiveEntitySections(
+		PersistentEntitySectionManager<Entity> entityManager,
+		long chunkKey,
+		ScanJob job,
+		@Nullable Set<UUID> seenUuids
+	) {
+		if (job.entityConsumer == null) {
+			return;
+		}
+		EntitySectionStorage<Entity> sectionStorage = ((PersistentEntityManagerAccessor<Entity>) entityManager).ogsky$getSectionStorage();
+		sectionStorage.getExistingSectionsInChunk(chunkKey).forEach(section ->
+			section.getEntities().forEach(entity -> {
+				if (entity.isRemoved()) {
+					return;
+				}
+				if (seenUuids != null) {
+					seenUuids.add(entity.getUUID());
+				}
+				int bx = Mth.floor(entity.getX());
+				int bz = Mth.floor(entity.getZ());
+				if (bx >= job.minX && bx <= job.maxX && bz >= job.minZ && bz <= job.maxZ) {
+					job.entityConsumer.accept(entity.getType(), 1);
+				}
+			})
+		);
+	}
+
+	private static void processCompletedEntityDiskRead(MinecraftServer server, ScanJob job, InFlightRead completed) {
+		if (job.entityConsumer == null) {
+			return;
+		}
+		ServerLevel level = server.getLevel(completed.dimension);
+		if (level == null) {
+			return;
+		}
+		PersistentEntitySectionManager<Entity> entityManager = ((ServerLevelEntityAccessor) level).ogsky$getEntityManager();
+		long chunkKey = ChunkPos.pack(completed.chunkX, completed.chunkZ);
+		if (entityManager.areEntitiesLoaded(chunkKey)) {
+			scanLiveEntitySections(entityManager, chunkKey, job, null);
+			return;
+		}
+
+		// Collect any entities present in memory for this chunk before merging disk NBT to avoid double-counting.
+		Set<UUID> seenLiveUuids = new HashSet<>(0);
+		scanLiveEntitySections(entityManager, chunkKey, job, seenLiveUuids);
+
+		Optional<CompoundTag> maybeTag = completed.readFuture.getNow(Optional.empty());
+		if (maybeTag.isEmpty()) {
+			return;
+		}
+
+		SimpleRegionStorage regionStorage = entityRegionStorage(entityManager);
+		if (regionStorage == null) {
+			return;
+		}
+		try {
+			CompoundTag upgraded = regionStorage.upgradeChunkTag(maybeTag.get(), -1);
+			ListTag entities = upgraded.getListOrEmpty("Entities");
+			countNbtEntities(entities, Double.NaN, Double.NaN, seenLiveUuids, job);
+		} catch (Exception ex) {
+			OgskyCore.LOGGER.warn(
+				"Failed parsing serialized entities ({}, {}) in {} during island scan {}: {}",
+				completed.chunkX,
+				completed.chunkZ,
+				completed.dimension.identifier(),
+				job.islandId,
+				ex.toString()
+			);
+		}
+	}
+
+	private static void countNbtEntities(
+		ListTag entities,
+		double fallbackX,
+		double fallbackZ,
+		Set<UUID> seenLiveUuids,
+		ScanJob job
+	) {
+		if (job.entityConsumer == null || entities.isEmpty()) {
+			return;
+		}
+		for (int i = 0; i < entities.size(); i++) {
+			CompoundTag entityTag = entities.getCompoundOrEmpty(i);
+			if (entityTag.isEmpty()) {
+				continue;
+			}
+			ListTag posTag = entityTag.getListOrEmpty("Pos");
+			double x = posTag.size() >= 3 ? posTag.getDoubleOr(0, fallbackX) : fallbackX;
+			double z = posTag.size() >= 3 ? posTag.getDoubleOr(2, fallbackZ) : fallbackZ;
+
+			boolean skipSelf = !seenLiveUuids.isEmpty()
+				&& entityTag.read("UUID", UUIDUtil.CODEC).map(seenLiveUuids::contains).orElse(false);
+
+			if (!skipSelf && !Double.isNaN(x) && !Double.isNaN(z)) {
+				int bx = Mth.floor(x);
+				int bz = Mth.floor(z);
+				if (bx >= job.minX && bx <= job.maxX && bz >= job.minZ && bz <= job.maxZ) {
+					String rawId = entityTag.getStringOr("id", "");
+					Identifier typeId = Identifier.tryParse(rawId);
+					if (typeId != null) {
+						BuiltInRegistries.ENTITY_TYPE.getOptional(typeId)
+							.ifPresent(type -> job.entityConsumer.accept(type, 1));
+					}
+				}
+			}
+
+			ListTag passengers = entityTag.getListOrEmpty("Passengers");
+			if (!passengers.isEmpty()) {
+				countNbtEntities(passengers, x, z, seenLiveUuids, job);
+			}
+		}
 	}
 
 	private static @Nullable InFlightRead pollAnyCompleted(ArrayDeque<InFlightRead> queue) {
@@ -468,11 +693,14 @@ public final class CoreIslandScanService implements IslandScanService {
 		private final int maxZ;
 		private final IslandScanOptions options;
 		private final BlockStateCountConsumer consumer;
+		private final @Nullable EntityTypeCountConsumer entityConsumer;
 		private final List<ChunkTarget> targets;
 		private final ArrayDeque<InFlightRead> inFlightReads = new ArrayDeque<>();
+		private final ArrayDeque<InFlightRead> inFlightEntityReads = new ArrayDeque<>();
 		private final CompletableFuture<IslandScanResult> future;
 
 		private int nextTargetIndex;
+		private int nextEntityTargetIndex;
 		private int loadedChunksScanned;
 		private int diskChunksScanned;
 		private int skippedUnbornChunks;
@@ -486,6 +714,7 @@ public final class CoreIslandScanService implements IslandScanService {
 			int maxZ,
 			IslandScanOptions options,
 			BlockStateCountConsumer consumer,
+			@Nullable EntityTypeCountConsumer entityConsumer,
 			List<ChunkTarget> targets,
 			CompletableFuture<IslandScanResult> future
 		) {
@@ -496,6 +725,7 @@ public final class CoreIslandScanService implements IslandScanService {
 			this.maxZ = maxZ;
 			this.options = options;
 			this.consumer = consumer;
+			this.entityConsumer = entityConsumer;
 			this.targets = targets;
 			this.future = future;
 		}

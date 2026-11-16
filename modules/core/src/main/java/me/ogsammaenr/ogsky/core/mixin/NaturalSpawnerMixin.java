@@ -1,5 +1,7 @@
 package me.ogsammaenr.ogsky.core.mixin;
 
+import me.ogsammaenr.ogsky.core.api.mutation.EntitySpawnSource;
+import me.ogsammaenr.ogsky.core.internal.mutation.CoreWorldMutationService;
 import me.ogsammaenr.ogsky.core.internal.protection.ProtectionResolver;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -32,6 +34,21 @@ public abstract class NaturalSpawnerMixin {
 		ProtectionResolver resolver = ProtectionResolver.active();
 		if (resolver != null && !resolver.isNaturalSpawnAllowed(level, pos, mobCategory)) {
 			cir.setReturnValue(false);
+			return;
+		}
+		if (CoreWorldMutationService.hasEntitySpawnGuards()) {
+			CoreWorldMutationService service = CoreWorldMutationService.active();
+			if (service != null && !service.evaluateEntitySpawn(
+				level,
+				currentSpawnData.type(),
+				pos.getX() + 0.5,
+				pos.getY(),
+				pos.getZ() + 0.5,
+				null,
+				EntitySpawnSource.NATURAL
+			)) {
+				cir.setReturnValue(false);
+			}
 		}
 	}
 }

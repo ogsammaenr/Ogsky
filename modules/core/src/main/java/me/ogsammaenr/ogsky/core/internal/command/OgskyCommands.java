@@ -1119,12 +1119,28 @@ public final class OgskyCommands implements IslandCommandHelper {
 		};
 	}
 
-	private static @Nullable Identifier resolveFlagId(String raw) {
+	private @Nullable Identifier resolveFlagId(String raw) {
 		String trimmed = raw.trim().toLowerCase(Locale.ROOT);
 		if (trimmed.isEmpty()) {
 			return null;
 		}
-		return trimmed.contains(":") ? Identifier.tryParse(trimmed) : Identifier.tryBuild(OgskyCore.MOD_ID, trimmed);
+		if (trimmed.contains(":")) {
+			return Identifier.tryParse(trimmed);
+		}
+		Identifier coreId = Identifier.tryBuild(OgskyCore.MOD_ID, trimmed);
+		if (coreId != null && flagRegistry.find(coreId).isPresent()) {
+			return coreId;
+		}
+		Identifier matched = null;
+		for (IslandFlagDefinition def : flagRegistry.listAll()) {
+			if (def.id().getPath().equals(trimmed)) {
+				if (matched != null) {
+					return null; // ambiguous path; caller must qualify with namespace:path
+				}
+				matched = def.id();
+			}
+		}
+		return matched != null ? matched : coreId;
 	}
 
 	private static @Nullable Boolean parseBooleanValue(String raw) {

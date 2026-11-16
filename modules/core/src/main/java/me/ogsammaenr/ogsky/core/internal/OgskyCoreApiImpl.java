@@ -13,6 +13,7 @@ import me.ogsammaenr.ogsky.core.api.gui.GuiService;
 import me.ogsammaenr.ogsky.core.api.island.IslandOperationResult;
 import me.ogsammaenr.ogsky.core.api.island.IslandService;
 import me.ogsammaenr.ogsky.core.api.island.IslandView;
+import me.ogsammaenr.ogsky.core.api.mutation.WorldMutationService;
 import me.ogsammaenr.ogsky.core.api.scan.IslandScanService;
 import me.ogsammaenr.ogsky.core.api.service.ServiceRegistry;
 import me.ogsammaenr.ogsky.core.api.event.IslandDeletedEvent;
@@ -32,6 +33,7 @@ import me.ogsammaenr.ogsky.core.internal.island.Island;
 import me.ogsammaenr.ogsky.core.internal.island.IslandLifecycleService;
 import me.ogsammaenr.ogsky.core.internal.island.OperationResult;
 import me.ogsammaenr.ogsky.core.internal.island.TeamService;
+import me.ogsammaenr.ogsky.core.internal.mutation.CoreWorldMutationService;
 import me.ogsammaenr.ogsky.core.internal.permission.LuckPermsPermissionBridge;
 import me.ogsammaenr.ogsky.core.internal.protection.ProtectionListeners;
 import me.ogsammaenr.ogsky.core.internal.protection.ProtectionResolver;
@@ -72,6 +74,7 @@ public final class OgskyCoreApiImpl implements OgskyCoreApi {
 	private final ProtectionResolver protectionResolver;
 	private final ProtectionListeners protectionListeners;
 	private final CoreIslandScanService scanService;
+	private final CoreWorldMutationService mutationService;
 
 	public OgskyCoreApiImpl() {
 		this(CoreConfig.defaults());
@@ -117,6 +120,8 @@ public final class OgskyCoreApiImpl implements OgskyCoreApi {
 			this.eventBus
 		);
 		this.scanService = new CoreIslandScanService(this.islandService);
+		this.mutationService = new CoreWorldMutationService();
+		CoreWorldMutationService.setActive(this.mutationService);
 		this.eventBus.subscribe(IslandDeletedEvent.class, e -> this.scanService.cancelScansForIsland(e.islandId()));
 		this.eventBus.subscribe(IslandResetEvent.class, e -> {
 			if (!e.isCancelled()) {
@@ -213,6 +218,15 @@ public final class OgskyCoreApiImpl implements OgskyCoreApi {
 
 	public CoreIslandScanService scanService() {
 		return scanService;
+	}
+
+	@Override
+	public WorldMutationService mutations() {
+		return mutationService;
+	}
+
+	public CoreWorldMutationService mutationService() {
+		return mutationService;
 	}
 
 	public ProtectionResolver protection() {
