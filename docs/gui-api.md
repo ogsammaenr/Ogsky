@@ -1,11 +1,17 @@
 # Ogsky Shared GUI API (`core.api.gui`)
 
-`OgskyCore.api().guis()` ([GuiService](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/gui/GuiService.java)) provides a UI-agnostic declarative GUI contract in `modules/core` so optional Skyblock modules (`panel`, `level`, future `warps`, `challenges`, etc.) can expose rich interactive menus and contribute summary lines without:
+`OgskyCore.api().guis()` ([GuiService](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/gui/GuiService.java)) provides a UI-agnostic declarative GUI contract in `modules/core` so optional Skyblock modules (`panel`, `level`, `limits`, future `warps`, `challenges`, etc.) can expose rich interactive menus and contribute summary lines without:
 
 - depending on or importing `modules/panel`, or
 - writing custom `ChestMenu` / `Slot` / anti-dupe packet mixins of their own.
 
-When `ogsky-panel` is bundled, `PanelGuiHost` renders every registered screen inside `OgskyCustomGuiMenu`, sharing `OgskyReadOnlyChestMenu` dupe/swap/creative protections. When `ogsky-panel` is **not** bundled (e.g., `-Pmodules=core` or `-Pmodules=core,level`), `core.guis().isAvailable()` returns `false` and `openScreen(...)` safely returns `false` so modules can fall back to chat output.
+When `ogsky-panel` is bundled, `PanelGuiHost` renders every registered screen inside `OgskyCustomGuiMenu`, sharing `OgskyReadOnlyChestMenu` dupe/swap/creative protections. When `ogsky-panel` is **not** bundled (e.g., `-Pmodules=core` or `-Pmodules=core,limits`), `core.guis().isAvailable()` returns `false` and `openScreen(...)` safely returns `false` so modules can fall back to chat output.
+
+> See also: [Core Public API Reference](core-api.md) and [Module Architecture, Connections & Extension Guide](modules.md).
+
+### Live Optional Module Screens
+- **`ogsky-level`:** Contributes summary `ogsky_level:summary` (`sortOrder = 20`), screens `ogsky_level:top`, `ogsky_level:detail`, `ogsky_level:values`, and panel actions `ogsky:island_level`, `ogsky_level:island_top`, `ogsky_level:block_values`.
+- **`ogsky-limits`:** Contributes summary `ogsky_limits:summary` (`sortOrder = 30`, gated by `ogsky_limits:view_limits`), filterable/sortable screen `ogsky_limits:overview`, and panel action `ogsky_limits:island_limits`.
 
 ---
 

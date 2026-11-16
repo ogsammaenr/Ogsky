@@ -13,8 +13,14 @@ public interface DatabaseService {
 	 */
 	void registerModule(String moduleId, List<SchemaMigration> migrations);
 
+	/**
+	 * Returns the open {@link ModuleDatabase} for {@code moduleId}, or empty before {@code SERVER_STARTING} or after shutdown.
+	 */
 	Optional<ModuleDatabase> find(String moduleId);
 
+	/**
+	 * Returns the open {@link ModuleDatabase} for {@code moduleId}, throwing {@link IllegalStateException} if not open.
+	 */
 	default ModuleDatabase require(String moduleId) {
 		return find(moduleId).orElseThrow(() ->
 			new IllegalStateException("Module database is not open for module: " + moduleId)

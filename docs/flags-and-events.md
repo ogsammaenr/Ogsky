@@ -2,7 +2,7 @@
 
 This document specifies how **BentoBox / BSkyBlock**'s protection engine, 3-tier flags, domain events, and extensible command tree integrate into **`ogsky-core`** (`me.ogsammaenr.ogsky.core.api.*`).
 
-> **Minecraft 26.3 Reminder:** Before writing Fabric listeners, Brigadier nodes, or mixins for any item below, verify exact MC `26.3` / Fabric API class & method signatures using the `mc-source-lookup` skill.
+> See also: [Core Public API Reference](core-api.md), [Modules & Configuration Guide](modules.md), [Architecture Overview](architecture.md), and [Minecraft 26.3 Source Verification](island-spec.md).
 
 ---
 
@@ -10,65 +10,74 @@ This document specifies how **BentoBox / BSkyBlock**'s protection engine, 3-tier
 
 Ogsky adopts BentoBox's 3-category `Flag.Type` pattern while storing values in RAM using sequential slot indices rather than boxed `HashMap<Flag, Integer>` maps.
 
-### Flag Contract (Planned Core API)
+### Flag Contract (`OgskyCoreApi.flags()`)
 
-- `IslandFlagDefinition` registered at module startup via `OgskyCoreApi.flags()` (`FlagRegistry`):
-  - `Identifier id` (e.g., `ogsky:break_blocks`, `ogsky:pvp_overworld`, or custom `ogsky-level:...`)
+- `IslandFlagDefinition` registered inside `OgskyModule.onLoad(OgskyCoreApi)` via `OgskyCore.api().flags()` ([`FlagRegistry`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/flag/FlagRegistry.java)):
+  - `Identifier id` (e.g., `ogsky:break_blocks`, `ogsky:pvp_overworld`, or `ogsky_limits:view_limits`)
   - `FlagType type`: `PROTECTION`, `SETTING`, `WORLD_SETTING`
-  - `FlagMode mode`: `BASIC` | `ADVANCED` *(hint for `ogsky-panel` UI grouping/filtering, inspired by BentoBox `Flag.Mode`)*
+  - `FlagMode mode`: `BASIC` | `ADVANCED` *(hint for `ogsky-panel` UI grouping/filtering, adapted from BentoBox `Flag.Mode`)*
   - `String iconItemId`: vanilla item identifier for UI icons (e.g., `"minecraft:iron_pickaxe"`)
-  - `int sortOrder`
-  - Default value:
-    - For `PROTECTION`: default minimum `byte` rank (`0..5`, typically `IslandRole.COOP` or `IslandRole.MEMBER`) + `boolean wildernessAllowed`
-    - For `SETTING`: default `boolean`
-    - For `WORLD_SETTING`: default `boolean` (stored globally in config / `world_meta`, editable by admins)
+  - `int sortOrder` *(used for deterministic slot ordering alongside `id.toString()`)*
+  - Default values:
+    - For `PROTECTION`: default minimum `byte` rank (`0..6`, see `IslandRole`) + `boolean wildernessAllowed`
+    - For `SETTING`: default `boolean` *(stored in a compact 64-bit `long` mask; max `64` `SETTING` flags total across all bundled modules)*
+    - For `WORLD_SETTING`: default `boolean` *(stored globally in `world_settings` SQLite table + `config/ogsky/core.json` defaults, editable by admins via `/isadmin worldflag`)*
 
-### Compact Slot Allocation
+### Deterministic Freeze & Slot Allocation
 
-- During startup (`SERVER_STARTING` / after all `ogsky-module` entrypoints load), `FlagRegistry` freezes registration order and assigns deterministic slot indices per `FlagType` + persists flag ID-to-config/DB key mapping so optional modules can be enabled/disabled without corrupting existing island overrides.
+- After all `"ogsky-module"` entrypoints finish loading during `OgskyCoreMod.onInitialize()`, `OgskyCoreApiImpl.freezeRegistries()` calls `FlagRegistry.freeze()`, locking further flag registration and assigning deterministic per-`FlagType` contiguous slot indices `0..count(type)-1`.
+- SQLite tables (`island_protection_flags`, `island_setting_flags`, `world_settings`) key persisted overrides by string `flag_id` (`Identifier`), so enabling or removing optional modules never corrupts existing islands' overrides.
 
 ---
 
 ## 2. Built-In BentoBox-Aligned Flag Catalog
 
-### A. `PROTECTION` Flags (Minimum `IslandRole` byte `0..5`)
+### A. `PROTECTION` Flags (Minimum `IslandRole` byte `0..6`)
 
-| Flag ID (`ogsky:*`) | Default Min Rank | Covers / Guarded Interactions |
-| :--- | :--- | :--- |
-| `break_blocks` | `COOP (1)` or `MEMBER (3)` *(configurable)* | General block breaking (excluding specialized flags below when defined) |
-| `place_blocks` | `COOP (1)` or `MEMBER (3)` | General block placing inside island boundaries |
-| `container` | `MEMBER (3)` | Chests, trapped chests, barrels, shulker boxes, dispensers, droppers, crafters, bookshelves |
-| `furnace` | `MEMBER (3)` | Furnaces, blast furnaces, smokers |
-| `hopper_use` | `MEMBER (3)` | Opening hopper inventories & modifying hopper state |
-| `break_hoppers` | `MEMBER (3)` | Breaking hoppers (overrides `break_blocks` when stricter) |
-| `break_spawners` | `ADMIN (4)` | Breaking monster spawners (overrides `break_blocks` when stricter) |
-| `door` | `VISITOR (0)` or `COOP (1)` | Wooden/copper doors & fence gates |
-| `trapdoor` | `COOP (1)` | Trapdoors |
-| `button_lever` | `COOP (1)` | Buttons, levers |
-| `pressure_plate` | `VISITOR (0)` | Player/entity pressure plates & tripwires |
-| `redstone` | `MEMBER (3)` | Repeaters, comparators, daylight detectors, note blocks, copper bulbs |
-| `bed` | `MEMBER (3)` | Sleeping / interacting with beds and respawn anchors |
-| `anvil` | `COOP (1)` | Anvil interaction & damaging |
-| `beacon` | `MEMBER (3)` | Beacon GUI & effect selection |
-| `brewing` | `MEMBER (3)` | Brewing stands & cauldrons |
-| `enchanting` | `VISITOR (0)` | Enchanting tables & grindstones & stonecutters & looms & smithing tables |
-| `armor_stand` | `MEMBER (3)` | Placing, breaking, equipping/removing armor stands |
-| `item_frame` | `MEMBER (3)` | Placing, breaking, rotating items in (glow) item frames & paintings |
-| `bucket` | `MEMBER (3)` | Filling/emptying water, lava, milk, or mob buckets |
-| `crop_trample` | `MEMBER (3)` | Farmland trampling protection |
-| `harvest` | `COOP (1)` | Harvesting/replanting crops, sweet berries, cocoa, turtle eggs |
-| `breeding` | `MEMBER (3)` | Breeding animals / feeding livestock |
-| `shear_entity` | `COOP (1)` | Shearing sheep, mooshrooms, snow golems |
-| `hurt_animals` | `MEMBER (3)` | Attacking passive mobs (cows, sheep, horses, pets) |
-| `hurt_villagers` | `ADMIN (4)` | Attacking villagers, wandering traders, iron golems |
-| `hurt_monsters` | `VISITOR (0)` | Attacking hostile mobs inside island bounds |
-| `trading` | `VISITOR (0)` | Trading with villagers / wandering traders |
-| `mount_entity` | `COOP (1)` | Riding horses, camels, boats, minecarts & leash usage |
-| `ender_pearl` | `COOP (1)` | Throwing ender pearls or chorus fruit teleportation onto/inside island |
-| `drop_item` | `VISITOR (0)` | Dropping items on an island |
-| `pickup_item` | `VISITOR (0)` | Picking up item drops on an island |
-| `portal_use` | `VISITOR (0)` | Entering island Nether/End portals |
-| `flint_and_steel` | `MEMBER (3)` | Igniting blocks/TNT/portals with flint & steel or fire charges |
+Defaults verified against [`BuiltinFlags`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/internal/flag/BuiltinFlags.java) (overridable in `config/ogsky/core.json` under `flags.protectionDefaults` and `flags.wildernessAllow`):
+
+| Flag ID (`ogsky:*`) | Mode | Default Min Rank | Wilderness Allowed | Covers / Guarded Interactions |
+| :--- | :--- | :--- | :--- | :--- |
+| `break_blocks` | `BASIC` | `MEMBER (3)` | `false` | General block breaking (specialized overrides below check stricter requirement) |
+| `place_blocks` | `BASIC` | `MEMBER (3)` | `false` | General block placing inside island boundaries |
+| `container` | `BASIC` | `MEMBER (3)` | `false` | Chests, trapped chests, barrels, shulker boxes, dispensers, droppers, crafters, decorated pots, chiseled bookshelves |
+| `furnace` | `BASIC` | `MEMBER (3)` | `false` | Furnaces, blast furnaces, smokers |
+| `hopper_use` | `ADVANCED` | `MEMBER (3)` | `false` | Opening hopper inventories & modifying hopper state |
+| `break_hoppers` | `ADVANCED` | `MEMBER (3)` | `false` | Breaking hoppers (checked alongside `break_blocks`; stricter rank applies) |
+| `break_spawners` | `ADVANCED` | `ADMIN (4)` | `false` | Breaking spawners / trial spawners (checked alongside `break_blocks`; stricter rank applies) |
+| `door` | `BASIC` | `COOP (1)` | `false` | Doors & fence gates |
+| `trapdoor` | `BASIC` | `COOP (1)` | `false` | Trapdoors |
+| `button_lever` | `BASIC` | `COOP (1)` | `false` | Buttons & levers |
+| `pressure_plate` | `BASIC` | `VISITOR (0)` | `false` | Player/entity pressure plates & tripwires |
+| `redstone` | `ADVANCED` | `MEMBER (3)` | `false` | Repeaters, comparators, daylight detectors, note blocks, copper bulbs |
+| `bed` | `BASIC` | `MEMBER (3)` | `false` | Sleeping / interacting with beds and respawn anchors |
+| `anvil` | `BASIC` | `COOP (1)` | `false` | Anvil interaction & damaging |
+| `beacon` | `ADVANCED` | `MEMBER (3)` | `false` | Beacon GUI & effect selection |
+| `brewing` | `ADVANCED` | `MEMBER (3)` | `false` | Brewing stands & cauldrons |
+| `enchanting` | `BASIC` | `VISITOR (0)` | `false` | Enchanting tables, grindstones, stonecutters, looms, smithing tables, bells, jukeboxes, lecterns, composters |
+| `armor_stand` | `ADVANCED` | `MEMBER (3)` | `false` | Placing, breaking, equipping/removing armor stands |
+| `item_frame` | `ADVANCED` | `MEMBER (3)` | `false` | Placing, breaking, rotating items in (glow) item frames & paintings |
+| `bucket` | `BASIC` | `MEMBER (3)` | `false` | Filling/emptying water, lava, milk, powder snow, or mob buckets |
+| `crop_trample` | `BASIC` | `MEMBER (3)` | `false` | Farmland trampling protection |
+| `harvest` | `BASIC` | `COOP (1)` | `false` | Harvesting/replanting crops, sweet berries, cave vines, cocoa |
+| `breeding` | `BASIC` | `MEMBER (3)` | `false` | Breeding animals / feeding livestock |
+| `shear_entity` | `BASIC` | `COOP (1)` | `false` | Shearing sheep, mooshrooms, snow golems |
+| `hurt_animals` | `BASIC` | `MEMBER (3)` | `false` | Attacking passive mobs (animals, fish, ambient mobs, golems) |
+| `hurt_villagers` | `ADVANCED` | `ADMIN (4)` | `false` | Attacking villagers & wandering traders |
+| `hurt_monsters` | `BASIC` | `VISITOR (0)` | `true` | Attacking hostile mobs inside island bounds |
+| `trading` | `BASIC` | `VISITOR (0)` | `true` | Trading with villagers / wandering traders |
+| `mount_entity` | `BASIC` | `COOP (1)` | `false` | Riding mounts, boats, minecarts & leash usage |
+| `ender_pearl` | `ADVANCED` | `COOP (1)` | `false` | Throwing ender pearls or chorus fruit teleportation onto/inside island |
+| `drop_item` | `BASIC` | `VISITOR (0)` | `true` | Dropping items on an island |
+| `pickup_item` | `BASIC` | `VISITOR (0)` | `true` | Picking up item drops on an island |
+| `portal_use` | `BASIC` | `VISITOR (0)` | `true` | Entering island Nether/End portals |
+| `flint_and_steel` | `ADVANCED` | `MEMBER (3)` | `false` | Igniting blocks/TNT/portals with flint & steel or fire charges |
+
+#### Optional Module Flags
+
+| Flag ID | Registered By | Type / Mode | Default | Covers |
+| :--- | :--- | :--- | :--- | :--- |
+| `ogsky_limits:view_limits` | `ogsky-limits` | `PROTECTION` / `BASIC` | Config `defaultViewLimitsRank` (`MEMBER (3)`) | Controls who may view island block/entity limits via `/is limits`, summary line, or GUI screen |
 
 ### B. `SETTING` Flags (Per-Island Boolean Toggles)
 
@@ -117,59 +126,56 @@ Ogsky adopts BentoBox's 3-category `Flag.Type` pattern while storing values in R
 
 ## 4. BentoBox-Aligned Domain Event Catalog (`OgskyEventBus`)
 
-All domain events implement `OgskyEvent` and are dispatched via `OgskyCore.api().events()`.
+All domain events implement [`OgskyEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/OgskyEvent.java) and are dispatched via `OgskyCore.api().events()`. Full payload definitions and signatures are documented in [`docs/core-api.md`](core-api.md#31-events-meogsammaenrogskycoreapievent).
 
 > **Thread-Safety Rule (Learned from BentoBox):** All domain events MUST be published synchronously on the **main Minecraft server tick thread**. Async SQLite / blueprint callbacks must marshal via `server.execute(...)` before calling `events().publish(...)`.
 
-### Implemented in Phase 0
-- [`IslandCreatedEvent`](file:///workspace/ogsky-template-26.3/modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandCreatedEvent.java) `(UUID islandId, UUID ownerId)`
-- [`IslandDeletedEvent`](file:///workspace/ogsky-template-26.3/modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandDeletedEvent.java) `(UUID islandId)`
-
-### Planned in Phase 1 (Aligned with BentoBox `IslandEvent`, `TeamEvent`, `FlagEvent`)
-
 1. **Island Lifecycle & State Events:**
-   - `IslandPreCreateEvent` *(cancellable: `UUID ownerId`, `String bundleId`)*
-   - `IslandCreatedEvent` *(already exists; post-registration & initial Overworld allocation)*
-   - `IslandDimensionInitEvent` `(UUID islandId, Identifier dimensionId, String blueprintId)` *(fired when lazy `ogsky:nether` or `ogsky:end` island structure is initialized)*
-   - `BlueprintPasteCompletedEvent` `(UUID islandId, Identifier dimensionId, String bundleId)` *(fired on server thread when tick-budgeted `.nbt` paste completes)*
-   - `IslandResetEvent` *(cancellable pre-reset or post-reset record: `UUID islandId, UUID ownerId, String newBundleId`)*
-   - `IslandPreDeleteEvent` *(cancellable: `UUID islandId, UUID actorId, DeleteReason` — `PLAYER_DELETE`, `PURGE`, `ADMIN`)*
-   - `IslandDeletedEvent` *(already exists; triggers `level.db`, `panel.db`, etc. cleanup)*
-   - `IslandRangeChangeEvent` `(UUID islandId, short oldHalfSize, short newHalfSize)` *(supports upgrades/admin resize)*
-   - `IslandLockChangedEvent` `(UUID islandId, UUID actorId, boolean locked)`
+   - [`IslandPreCreateEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandPreCreateEvent.java) *(cancellable: `UUID ownerId`, `String bundleId`)*
+   - [`IslandCreatedEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandCreatedEvent.java) `(UUID islandId, UUID ownerId)` *(post-registration & Overworld slot allocation)*
+   - [`IslandDimensionInitEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandDimensionInitEvent.java) `(UUID islandId, Identifier dimensionId, String blueprintId)` *(fired when `ogsky:overworld`, or lazy `ogsky:nether` / `ogsky:end`, is initialized)*
+   - [`BlueprintPasteCompletedEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/BlueprintPasteCompletedEvent.java) `(UUID islandId, Identifier dimensionId, String bundleId)` *(fired on server thread when tick-budgeted `.nbt` paste completes)*
+   - [`IslandResetEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandResetEvent.java) *(cancellable: `UUID islandId, UUID ownerId, String newBundleId`)*
+   - [`IslandPreDeleteEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandPreDeleteEvent.java) *(cancellable: `UUID islandId, UUID actorId, DeleteReason` — `PLAYER_DELETE`, `PURGE`, `ADMIN`)*
+   - [`IslandDeletedEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandDeletedEvent.java) `(UUID islandId)` *(triggers `level.db`, `limits.db`, and `panel` cleanup)*
+   - [`IslandRangeChangeEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandRangeChangeEvent.java) `(UUID islandId, short oldHalfSize, short newHalfSize)` *(triggers `limits` rescan & `panel` refresh)*
+   - [`IslandLockChangedEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandLockChangedEvent.java) `(UUID islandId, UUID actorId, boolean locked)`
 2. **Player Boundary & Access Events:**
-   - `IslandEnterEvent` *(cancellable when not admin bypass: `UUID islandId, UUID playerId`)*
-   - `IslandExitEvent` `(UUID islandId, UUID playerId)`
-   - `IslandBanEvent` *(cancellable: `UUID islandId, UUID actorId, UUID targetId`)*
-   - `IslandUnbanEvent` `(UUID islandId, UUID actorId, UUID targetId)`
-3. **Team & Role Membership Events (Adapting BentoBox `TeamEvent` + Ogsky Primary/Secondary Rules):**
-   - `TeamInviteEvent` *(cancellable: `UUID islandId, UUID inviterId, UUID inviteeId, byte targetRole`)*
-   - `TeamJoinEvent` `(UUID islandId, UUID playerId, byte role)` *(fired after primary/secondary cap validation succeeds)*
-   - `TeamLeaveEvent` *(cancellable: `UUID islandId, UUID playerId, byte oldRole`)*
-   - `TeamKickEvent` *(cancellable: `UUID islandId, UUID actorId, UUID targetId, byte oldRole`)*
-   - `TeamRankChangeEvent` *(cancellable: `UUID islandId, UUID actorId, UUID targetId, byte oldRole, byte newRole`)*
-   - `TeamOwnerChangeEvent` *(cancellable: `UUID islandId, UUID oldOwnerId, UUID newOwnerId`)*
-4. **Flag Events:**
-   - `IslandProtectionFlagChangedEvent` `(UUID islandId, UUID actorId, Identifier flagId, byte oldMinRank, byte newMinRank)`
-   - `IslandSettingFlagChangedEvent` `(UUID islandId, UUID actorId, Identifier flagId, boolean oldValue, boolean newValue)`
+   - [`IslandEnterEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandEnterEvent.java) *(cancellable unless `adminBypass == true`: `UUID islandId, UUID playerId, boolean adminBypass`)*
+   - [`IslandExitEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandExitEvent.java) `(UUID islandId, UUID playerId)`
+   - [`IslandBanEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandBanEvent.java) *(cancellable: `UUID islandId, UUID actorId, UUID targetId`)*
+   - [`IslandUnbanEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandUnbanEvent.java) `(UUID islandId, UUID actorId, UUID targetId)`
+3. **Team & Role Membership Events (Adapting BentoBox `TeamEvent` + Primary/Secondary Rules):**
+   - [`TeamInviteEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/TeamInviteEvent.java) *(cancellable: `UUID islandId, UUID inviterId, UUID inviteeId, byte targetRole`)*
+   - [`TeamJoinEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/TeamJoinEvent.java) `(UUID islandId, UUID playerId, byte role)` *(fired after primary/secondary cap validation succeeds)*
+   - [`TeamLeaveEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/TeamLeaveEvent.java) *(cancellable: `UUID islandId, UUID playerId, byte oldRole`)*
+   - [`TeamKickEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/TeamKickEvent.java) *(cancellable: `UUID islandId, UUID actorId, UUID targetId, byte oldRole`)*
+   - [`TeamRankChangeEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/TeamRankChangeEvent.java) *(cancellable: `UUID islandId, UUID actorId, UUID targetId, byte oldRole, byte newRole`)*
+   - [`TeamOwnerChangeEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/TeamOwnerChangeEvent.java) *(cancellable: `UUID islandId, UUID oldOwnerId, UUID newOwnerId`)*
+4. **Flag & Progression Events:**
+   - [`IslandProtectionFlagChangedEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandProtectionFlagChangedEvent.java) `(UUID islandId, UUID actorId, Identifier flagId, byte oldMinRank, byte newMinRank)`
+   - [`IslandSettingFlagChangedEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandSettingFlagChangedEvent.java) `(UUID islandId, UUID actorId, Identifier flagId, boolean oldValue, boolean newValue)`
+   - [`IslandLevelCalculatedEvent`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/event/IslandLevelCalculatedEvent.java) `(UUID islandId, UUID ownerId, long previousLevel, long newLevel, long blockPoints)` *(published by `ogsky-level`, observed by `ogsky-panel`)*
 
 ---
 
-## 5. Core Command Abstraction (`IslandCommandRegistry` — Adapting `CompositeCommand`)
+## 5. Core Command & World Mutation Abstractions
 
-Rather than writing a Bukkit-style string command parser, `core` wraps Fabric/Minecraft's native **Brigadier** dispatcher while providing BentoBox `CompositeCommand`-style ergonomics:
+### Extensible Brigadier Command Tree ([`IslandCommandRegistry`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/command/IslandCommandRegistry.java))
 
-- **Core exposes `OgskyCoreApi.commands()` (`IslandCommandRegistry`, Planned Phase 1):**
-  - Registers subcommand trees cleanly under `/island` and alias `/is`.
-  - Provides **`IslandCommandContext`** helper methods resolved from RAM:
-    - Player's primary `Island` (or current standing `Island`)
-    - Built-in pre-flight checks:
-      - Requires primary island / must NOT have primary island
-      - Requires minimum `IslandRole` (`byte 0..5`)
-      - Requires cooldown / admin permission node (`ogsky.admin.*`)
-      - Standardized localized error responses
-- **Examples Across Modules:**
-  - `core`: `/is create [bundle]`, `/is home`, `/is reset`, `/is delete`, `/is invite`, `/is accept`, `/is kick`, `/is leave`, `/is coop`, `/is trust`, `/is untrust`, `/is ban`, `/is unban`, `/is promote`, `/is demote`, `/is transfer`, `/is lock`, `/is sethome`, `/is info`, `/is flag ...`, `/isadmin ...`
-  - `panel` *(optional)*: registers `/is panel` & `/is settings` via `OgskyCore.api().commands()`.
-  - `level` *(optional)*: registers `/is level` & `/is top` via `OgskyCore.api().commands()`.
-  - When `modules=core` is built alone, `/is panel` or `/is level` simply aren't registered while all core `/is` commands keep working cleanly.
+Rather than building a custom string parser, `core` mounts native Minecraft **Brigadier** command trees (`/island` / `/is` and `/isadmin` / `/isa`) and merges module-contributed [`IslandSubcommand`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/command/IslandSubcommand.java) nodes:
+
+- **Core exposes `OgskyCore.api().commands()` (`IslandCommandRegistry`):**
+  - `registerSubcommand(IslandSubcommand)` mounts subcommands + aliases under `/island` and `/is`.
+  - `registerAdminSubcommand(IslandSubcommand)` mounts subcommands + aliases under `/isadmin` and `/isa`.
+  - Supplies [`IslandCommandHelper`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/command/IslandCommandHelper.java) providing RAM-resolved `primaryIsland(player)`, `islandAt(player)`, and permission checks (`hasPermission(source, node, fallbackOpLevel)`).
+- **Commands Across Current Modules (full permission matrix in [`docs/modules.md`](modules.md)):**
+  - `core`: `/is` (teleport home), `help`, `create [bundle]`, `reset [bundle]`, `delete [confirm]`, `home [dimension]`, `visit <player>`, `sethome`, `info [player]`, `members`, `invite <player>`, `accept`, `deny`, `cancel <player>`, `kick <player>`, `leave`, `coop <player>`, `uncoop <player>`, `trust <player>`, `untrust <player>`, `promote <player>`, `demote <player>`, `transfer <player>`, `ban <player>`, `unban <player>`, `lock [locked]`, `flags`, `flag <flag> <value>`; `/isadmin` `help|reload|delete|setrange|tp|info|bypass|worldflags|worldflag`.
+  - `panel` *(optional)*: `/is panel [tab]` (`gui`, `menu`) & `/is settings [category]` (`setting`).
+  - `level` *(optional)*: `/is level [player]` (`lvl`), `/is top [page]` (`leaderboard`), `/is values [page | search <query>]` (`value`, `worth`), `/isadmin level scan|scanall|reload`.
+  - `limits` *(optional)*: `/is limits [page|all|blocks|entities|chat|search <query>]` (`limit`), `/isadmin limits reload|rescanall|rescan <player>|inspect <player> [page]`.
+  - When `core` is built alone (`-Pmodules=core`), optional module subcommands simply aren't registered while all core `/is` & `/isadmin` commands function normally.
+
+### World Mutation Interceptors (`OgskyCore.api().mutations()`)
+
+For optional modules needing pre-placement/pre-spawn vetoes or block/entity lifecycle accounting (without coupling `core` to those modules), [`WorldMutationService`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/mutation/WorldMutationService.java) exposes `BlockPlacementGuard`, `BlockChangeObserver`, `EntitySpawnGuard`, and `EntityLifecycleObserver` backed by volatile fast-path Mixin guards in `ogsky-core`. See [`docs/core-api.md`](core-api.md#310-world-mutation-guards--observers-meogsammaenrogskycoreapimutation) for all call sites and threading guarantees.

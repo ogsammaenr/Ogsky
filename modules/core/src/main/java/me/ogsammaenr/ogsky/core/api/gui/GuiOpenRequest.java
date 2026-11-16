@@ -9,7 +9,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Immutable navigation & filter state request passed when opening or refreshing a registered module GUI screen.
+ * Immutable navigation and filter state request passed when opening or refreshing a registered module GUI screen.
  */
 public record GuiOpenRequest(
 	Identifier screenId,

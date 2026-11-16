@@ -33,11 +33,14 @@ Build all default modules (configured by `enabled_modules` in `gradle.properties
 ./gradlew build --console=plain
 ```
 
-Build a custom subset (e.g., `core` + `level` only):
+Build a custom subset (e.g., `core` + `limits` only, or `core` + `level` only):
 
 ```bash
-./gradlew build -Pmodules=core,level --console=plain
+./gradlew build -Pmodules=core,limits --console=plain
+./gradlew runGameTest -Pmodules=core,limits --console=plain
 ```
+
+> Note: Before committing or after interrupted GameTest runs, clean generated artifacts if needed (`rm -rf build/run/gameTest/world build/run/gameTest/config`).
 
 Verify nested Jar-in-Jar packaging inside the final bundle:
 

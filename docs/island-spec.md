@@ -2,7 +2,7 @@
 
 This document defines the canonical domain rules for `ogsky-core` islands, grid placement, dimensions, `.nbt` blueprint lazy loading, roles, protection flags, and RAM/SQLite layout. Every module and agent MUST conform to this specification.
 
-See also: [Flags & Domain Events Reference](flags-and-events.md), [Architecture](architecture.md), and [Roadmap](roadmap.md).
+See also: [Core API Reference](core-api.md), [Modules & Configuration Guide](modules.md), [Flags & Domain Events Reference](flags-and-events.md), [Architecture](architecture.md), and [Roadmap](roadmap.md).
 
 ---
 
@@ -71,6 +71,7 @@ Roles are stored strictly as `byte` values `0..5` in memory and SQLite, wrapped 
 | `3` | `MEMBER` | Üye / Member | Primary island membership |
 | `4` | `ADMIN` | Yönetici / Admin | Primary island management |
 | `5` | `OWNER` | Sahip / Owner | Primary island owner (transferable) |
+| `6` | `DISABLED` | Devre Dışı / Disabled | Sentinel threshold on `PROTECTION` flags (blocked even for Owner unless admin bypass is active) |
 
 ### Membership Rules (Enforced by `core`)
 
