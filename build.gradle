@@ -4,7 +4,7 @@ plugins {
 	id 'maven-publish'
 }
 
-def availableModules = ['core', 'panel', 'level'] as Set
+def availableModules = ['core', 'panel', 'level', 'limits'] as Set
 def requestedModulesRaw = providers.gradleProperty('modules')
 		.orElse(providers.gradleProperty('enabled_modules'))
 		.get()
