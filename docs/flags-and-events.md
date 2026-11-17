@@ -78,6 +78,8 @@ Defaults verified against [`BuiltinFlags`](../modules/core/src/main/java/me/ogsa
 | Flag ID | Registered By | Type / Mode | Default | Covers |
 | :--- | :--- | :--- | :--- | :--- |
 | `ogsky_limits:view_limits` | `ogsky-limits` | `PROTECTION` / `BASIC` | Config `defaultViewLimitsRank` (`MEMBER (3)`) | Controls who may view island block/entity limits via `/is limits`, summary line, or GUI screen |
+| `ogsky_warps:manage_warps` | `ogsky-warps` | `PROTECTION` / `BASIC` | Config `defaultManageWarpsRank` (`ADMIN (4)`) | Controls who may create, edit, move, toggle, delete, or visualize island warps |
+| `ogsky_warps:use_warp` | `ogsky-warps` | `PROTECTION` / `BASIC` | Config `defaultUseWarpRank` (`VISITOR (0)`) | Controls minimum rank required to teleport to an island's warps (bans & `island_lock` still apply) |
 
 ### B. `SETTING` Flags (Per-Island Boolean Toggles)
 
@@ -170,10 +172,11 @@ Rather than building a custom string parser, `core` mounts native Minecraft **Br
   - `registerAdminSubcommand(IslandSubcommand)` mounts subcommands + aliases under `/isadmin` and `/isa`.
   - Supplies [`IslandCommandHelper`](../modules/core/src/main/java/me/ogsammaenr/ogsky/core/api/command/IslandCommandHelper.java) providing RAM-resolved `primaryIsland(player)`, `islandAt(player)`, and permission checks (`hasPermission(source, node, fallbackOpLevel)`).
 - **Commands Across Current Modules (full permission matrix in [`docs/modules.md`](modules.md)):**
-  - `core`: `/is` (teleport home), `help`, `create [bundle]`, `reset [bundle]`, `delete [confirm]`, `home [dimension]`, `visit <player>`, `sethome`, `info [player]`, `members`, `invite <player>`, `accept`, `deny`, `cancel <player>`, `kick <player>`, `leave`, `coop <player>`, `uncoop <player>`, `trust <player>`, `untrust <player>`, `promote <player>`, `demote <player>`, `transfer <player>`, `ban <player>`, `unban <player>`, `lock [locked]`, `flags`, `flag <flag> <value>`; `/isadmin` `help|reload|delete|setrange|tp|info|bypass|worldflags|worldflag`.
+  - `core`: `/is` (teleport home), `help`, `create [bundle]`, `reset [bundle]`, `delete [confirm]`, `home [dimension]`, `sethome`, `info [player]`, `members`, `invite <player>`, `accept`, `deny`, `cancel <player>`, `kick <player>`, `leave`, `coop <player>`, `uncoop <player>`, `trust <player>`, `untrust <player>`, `promote <player>`, `demote <player>`, `transfer <player>`, `ban <player>`, `unban <player>`, `lock [locked]`, `flags`, `flag <flag> <value>`; `/isadmin` `help|reload|delete|setrange|tp|info|bypass|worldflags|worldflag`.
   - `panel` *(optional)*: `/is panel [tab]` (`gui`, `menu`) & `/is settings [category]` (`setting`).
   - `level` *(optional)*: `/is level [player]` (`lvl`), `/is top [page]` (`leaderboard`), `/is values [page | search <query>]` (`value`, `worth`), `/isadmin level scan|scanall|reload`.
   - `limits` *(optional)*: `/is limits [page|all|blocks|entities|chat|search <query>]` (`limit`), `/isadmin limits reload|rescanall|rescan <player>|inspect <player> [page]`.
+  - `warps` *(optional)*: `/is warp <player> [warp]`, `/is warps [chat|category|search|player|mine|show|set|remove|edit]`, `/is setwarp [name] [category]`, `/is delwarp [name]`, `/isadmin warps reload|inspect|delete|toggle`.
   - When `core` is built alone (`-Pmodules=core`), optional module subcommands simply aren't registered while all core `/is` & `/isadmin` commands function normally.
 
 ### World Mutation Interceptors (`OgskyCore.api().mutations()`)

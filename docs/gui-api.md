@@ -12,6 +12,7 @@ When `ogsky-panel` is bundled, `PanelGuiHost` renders every registered screen in
 ### Live Optional Module Screens
 - **`ogsky-level`:** Contributes summary `ogsky_level:summary` (`sortOrder = 20`), screens `ogsky_level:top`, `ogsky_level:detail`, `ogsky_level:values`, and panel actions `ogsky:island_level`, `ogsky_level:island_top`, `ogsky_level:block_values`.
 - **`ogsky-limits`:** Contributes summary `ogsky_limits:summary` (`sortOrder = 30`, gated by `ogsky_limits:view_limits`), filterable/sortable screen `ogsky_limits:overview`, and panel action `ogsky_limits:island_limits`.
+- **`ogsky-warps`:** Contributes summary `ogsky_warps:summary` (`sortOrder = 40`), screens `ogsky_warps:showcase`, `ogsky_warps:manage`, `ogsky_warps:edit`, and panel actions `ogsky_warps:showcase`, `ogsky_warps:manage_warps`.
 
 ---
 

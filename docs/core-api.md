@@ -176,6 +176,7 @@ Cross-module optional API example (`me.ogsammaenr.ogsky.core.api.level`):
   - `findById(UUID)`, `findPrimaryIsland(UUID)`, `findSecondaryIslands(UUID)`, `findAt(ResourceKey<Level>, int x, int z)`, `findByGridCell(int gridX, int gridZ)`, `allIslands()`
   - `islandCount()`, `lockedCellSize()`, `maxCoop()`, `maxTrusted()`, `defaultBlueprintId()`, `availableBlueprints()`, `roleDisplayName(byte)`
   - `isWorldSettingEnabled(Identifier flagId)`, `isProtectionAllowed(ResourceKey<Level> dimension, int x, int z, UUID playerUuid, Identifier flagId, boolean adminBypass)`, `isSettingEnabledAt(ResourceKey<Level> dimension, int x, int z, Identifier flagId)`
+  - `canEnterIsland(UUID islandId, ServerPlayer player)`, `isLocationSafe(ServerLevel level, double x, double y, double z)`
 - **Mutations (return `IslandOperationResult<T>(boolean success, String code, String message, @Nullable T value)`):**
   - `setProtectionRank(@Nullable UUID actorId, UUID islandId, Identifier flagId, byte newMinRank, boolean bypassRole)`
   - `setSettingFlag(@Nullable MinecraftServer server, @Nullable UUID actorId, UUID islandId, Identifier flagId, boolean enabled, boolean bypassRole)`
@@ -184,6 +185,7 @@ Cross-module optional API example (`me.ogsammaenr.ogsky.core.api.level`):
   - `createIsland(@Nullable MinecraftServer server, @Nullable ServerPlayer actor, UUID ownerId, @Nullable String requestedBundleId)`
   - `resetIsland(@Nullable MinecraftServer server, UUID actorId, UUID islandId, @Nullable String requestedBundleId, boolean bypassOwnership)`
   - `teleportHome(MinecraftServer server, ServerPlayer player, UUID islandId, @Nullable ResourceKey<Level> targetDimension)`
+  - `teleportToLocation(MinecraftServer server, ServerPlayer player, UUID islandId, ResourceKey<Level> targetDimension, double x, double y, double z, float yaw, float pitch, boolean enforceEntryAccess)`
   - `setHome(ServerPlayer player, UUID islandId, boolean bypassRole)`
 
 ---
@@ -234,6 +236,7 @@ Cross-module optional API example (`me.ogsammaenr.ogsky.core.api.level`):
   - `boolean isBypassActive(ServerPlayer player)` — checks `/isadmin bypass` per-session toggle first, then `"ogsky.admin.bypass.*"` (and `ProtectionResolver` checks flag-specific `"ogsky.admin.bypass.<flagPath>"`).
   - `boolean hasBlueprintPermission(ServerPlayer player, String bundleId)` — checks `"ogsky.blueprint.<bundleId>"` with fallback `0`.
   - `boolean hasBlueprintPermission(ServerPlayer player, BlueprintBundleView bundle)` — resolves `bundle.permissionNode()` (or `"ogsky.blueprint.<id>"`) with fallback `config.admin.fallbackOpLevel` when `bundle.requiresPermission()` is `true`, else `0`.
+  - `Optional<Boolean> checkExplicitPermission(UUID playerUuid, String permissionNode)` — queries explicit LuckPerms decision without OP-level fallback.
 
 ---
 

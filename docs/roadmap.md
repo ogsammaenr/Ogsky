@@ -1,7 +1,7 @@
 # Ogsky Development Roadmap
 
 ## Phase 0 — Modular & Agentic Foundation
-- [x] Multi-project Gradle structure (`modules/core`, `modules/panel`, `modules/level`, `modules/limits`)
+- [x] Multi-project Gradle structure (`modules/core`, `modules/panel`, `modules/level`, `modules/limits`, `modules/warps`)
 - [x] Compile-time module selection via `-Pmodules=...` and Fabric Jar-in-Jar bundling
 - [x] `OgskyCoreApi`: `OgskyEventBus`, `ServiceRegistry`, `IslandActionRegistry`, `DatabaseService` (SQLite + WAL + migrations)
 - [x] JUnit unit tests + headless `runGameTest` server verification + `deployServer` task
@@ -37,6 +37,12 @@ See canonical rules in [`docs/island-spec.md`](island-spec.md) and [`docs/flags-
 - [x] `limits.db` async batch persistence + protection flag `ogsky_limits:view_limits` + `/is limits` (`blocks|entities|chat|search`) & `/isadmin limits reload|rescanall|rescan|inspect`
 - [x] Panel & GUI integration (`ogsky_limits:summary`, filterable/sortable `ogsky_limits:overview`, action `ogsky_limits:island_limits`) with chat fallback when `ogsky-panel` is absent
 
-## Phase 5+ — Additional Modules & Optional Client Companion
-- [ ] Additional Skyblock modules (challenges, upgrades, warp/visit, generator/cobble ore upgrades)
+## Phase 5 — `warps`: Multi-Warp Showcase, Safe Teleport & Particle Markers
+- [x] `core` enhancements: removed built-in `/is visit` command and added strict anti-trap location safety validator (`SafeLocationCheck` / `IslandService.isLocationSafe` / `teleportToLocation` / `canEnterIsland`) + explicit permission lookup (`PermissionService.checkExplicitPermission`)
+- [x] Multi-warp model per island (`IslandWarp`, owner permission tier limits `ogsky.warps.limit.<n>`, category filters, custom item icon / owner-head default, popularity counter anti-spam, personal `ClientboundLevelParticlesPacket` marker command `/is warps show`)
+- [x] Config-driven `warmupSeconds` (cancelled on movement or `ServerLivingEntityEvents.AFTER_DAMAGE`) and `cooldownSeconds`, plus strict `CANCEL` safety policy on trapped/void warps
+- [x] `warps.db` async persistence + flags `ogsky_warps:manage_warps` & `ogsky_warps:use_warp` + `/is warp`, `/is warps`, `/is setwarp`, `/is delwarp`, `/isadmin warps`, GUI screens (`showcase`, `manage`, `edit`) sorting by Recent / Popularity / Island Level (`IslandLevelProvider`) / Alphabetical, and chat fallback without `ogsky-panel`
+
+## Phase 6+ — Additional Modules & Optional Client Companion
+- [ ] Additional Skyblock modules (votes/ratings, challenges, upgrades, generator/cobble ore upgrades)
 - [ ] Optional `modules/client-ui` mod (detectable via `ServerPlayNetworking.canSend`) rendering custom client `Screen`s from `PanelSnapshot` / `GuiScreenModel`

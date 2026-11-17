@@ -7,13 +7,15 @@ Ogsky is a server-side, compile-time modular Skyblock mod for **Minecraft 26.3 (
 ```text
 +----------------------------------------------------------------------+
 |                Root Bundle: ogsky-<version>.jar                      |
-|  Selects modules at build time via -Pmodules=core,panel,level,limits |
+|  Selects modules at build time via -Pmodules=core,panel,level,       |
+|  limits,warps                                                        |
 |                                                                      |
 |  META-INF/jars/                                                      |
 |   ├── ogsky-core-<version>.jar   (+ sqlite-jdbc Jar-in-Jar)          |
 |   ├── ogsky-panel-<version>.jar  (optional)                          |
 |   ├── ogsky-level-<version>.jar  (optional)                          |
-|   └── ogsky-limits-<version>.jar (optional)                          |
+|   ├── ogsky-limits-<version>.jar (optional)                          |
+|   └── ogsky-warps-<version>.jar  (optional)                          |
 +----------------------------------------------------------------------+
 ```
 
@@ -23,6 +25,7 @@ Ogsky is a server-side, compile-time modular Skyblock mod for **Minecraft 26.3 (
 - `modules/panel` (`ogsky-panel`): Depends only on `core`. Builds UI-agnostic, **tabbed/paginated `PanelSnapshot` ViewModels** combining `core.actions()`, `core.flags()`, island members, `core.guis()` summary contributors, and optional service data; binds `PanelGuiHost` onto `OgskyCore.api().guis()` so all optional module screens render through the shared dupe-proof `OgskyReadOnlyChestMenu` (`OgskyPanelMenu` + `OgskyCustomGuiMenu`); subscribes to `IslandLevelCalculatedEvent` and core events for live slot updates; persists preferences in `panel.db`; and registers `/is panel` & `/is settings` via `core.commands()`.
 - `modules/level` (`ogsky-level`): Depends only on `core`. Loads configurable block/tag point values (`100 points = 1 level` default) and scoring-only caps (`blockPointLimits`) from `config/ogsky/level.json` (live-reloadable via `/isadmin level reload`). Scans islands via `core.scans()`, persists snapshots & top block breakdowns in `level.db`, exposes `IslandLevelProvider` via `core.services()`, publishes `IslandLevelCalculatedEvent`, reacts to `IslandDeletedEvent`, `IslandResetEvent`, and `BlueprintPasteCompletedEvent`, contributes `ogsky_level:summary`, `ogsky_level:top`, `ogsky_level:detail`, and `ogsky_level:values` into `core.guis()` plus `ogsky:island_level` / `ogsky_level:island_top` / `ogsky_level:block_values` actions (falling back cleanly to chat output when `ogsky-panel` is not bundled), and registers `/is level`, `/is top`, `/is values`, & `/isadmin level scan|scanall|reload` via `core.commands()`.
 - `modules/limits` (`ogsky-limits`): Depends only on `core`. Enforces physical per-island block and entity placement limits loaded from `config/ogsky/limits.json` with multi-bucket accounting (individual rules, `#tag` rules, and named custom groups), fluid generator policies (`CANCEL`, `FALLBACK_TO_STONE`, `FULL_FALLBACK_WITH_AIR`), base multi-block counting, optional dynamic scaling via `core.services().find(IslandLevelProvider.class)`, compact RAM counters backed by `limits.db`, and tick-budgeted initial/rescan synchronization via `core.scans().scanIslandWithEntities(...)`. Registers protection flag `ogsky_limits:view_limits`, hooks all four `WorldMutationService` extension points (`core.mutations()`), contributes `ogsky_limits:summary`, `ogsky_limits:overview`, and action `ogsky_limits:island_limits` to `core.guis()`/`core.actions()` (with chat fallback when `ogsky-panel` is absent), and registers `/is limits` & `/isadmin limits reload|rescanall|rescan|inspect` via `core.commands()`.
+- `modules/warps` (`ogsky-warps`): Depends only on `core`. Provides multi-warp per-island showcase, owner-permission-scaled warp limits, category/icon customization (defaulting to owner player heads), optional `IslandLevelProvider` showcase sorting (`Recent`, `Popularity`, `Island Level`, `Alphabetical`), `warmupSeconds` (cancelled on movement or `ServerLivingEntityEvents.AFTER_DAMAGE`) and `cooldownSeconds`, strict `CANCEL` location safety via `core.islands().teleportToLocation(...)`, anti-spam popularity counting, personal `ClientboundLevelParticlesPacket` markers (`/is warps show`), `ogsky_warps:manage_warps` & `ogsky_warps:use_warp` flags, `warps.db` persistence, GUI screens (`ogsky_warps:showcase`, `manage`, `edit`) with chat fallback, and `/is warp`, `/is warps`, `/is setwarp`, `/is delwarp`, `/isadmin warps` commands.
 
 > Related specs:
 > - Core Public API reference (`me.ogsammaenr.ogsky.core.api.*`): [docs/core-api.md](core-api.md)

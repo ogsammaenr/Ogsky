@@ -10,6 +10,7 @@
 | `panel` | `ogsky-panel` | Tabbed `PanelSnapshot` control panel (`/is panel`, `/is settings`) and shared anti-dupe `ChestMenu` `GuiHost` |
 | `level` | `ogsky-level` | Block-worth evaluation, `/is level` / `/is top` / `/is values`, `IslandLevelProvider` service & `level.db` |
 | `limits` | `ogsky-limits` | Physical per-island block & entity placement limits, liquid generator policies, optional level scaling & `limits.db` |
+| `warps` | `ogsky-warps` | Multi-warp showcase, category/sort GUIs, warmup/cooldown safe teleport, particle markers, `manage_warps`/`use_warp` flags & `warps.db` |
 
 ## Documentation
 
