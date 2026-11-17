@@ -14,7 +14,8 @@
 			"me.ogsammaenr.ogsky.gametest.PanelGameTests",
 			"me.ogsammaenr.ogsky.gametest.SharedGuiGameTests",
 			"me.ogsammaenr.ogsky.gametest.LevelGameTests",
-			"me.ogsammaenr.ogsky.gametest.LimitsGameTests"
+			"me.ogsammaenr.ogsky.gametest.LimitsGameTests",
+			"me.ogsammaenr.ogsky.gametest.WarpsGameTests"
 		]
 	},
 	"mixins": [
