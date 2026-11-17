@@ -111,6 +111,7 @@ public final class OgskyCoreApiImpl implements OgskyCoreApi {
 		this.islandService.bindServices(this.blueprintService, this.lifecycleService, this.teamService);
 		this.permissionBridge = new LuckPermsPermissionBridge(config);
 		this.protectionResolver = new ProtectionResolver(this.islandService, this.permissionBridge);
+		this.islandService.bindProtectionResolver(this.protectionResolver);
 		this.portalRouter.setProtectionChecker(this.protectionResolver);
 		this.protectionListeners = new ProtectionListeners(
 			config,

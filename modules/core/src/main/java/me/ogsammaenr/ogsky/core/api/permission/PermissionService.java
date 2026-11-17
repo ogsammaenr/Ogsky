@@ -3,6 +3,9 @@ package me.ogsammaenr.ogsky.core.api.permission;
 import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintBundleView;
 import net.minecraft.server.level.ServerPlayer;
 
+import java.util.Optional;
+import java.util.UUID;
+
 /**
  * Public permission and admin bypass query API exposed by {@code ogsky-core}.
  * Checks LuckPerms (when installed), {@code fabric-permission-api-v1}, and vanilla OP level fallback in order.
@@ -33,4 +36,10 @@ public interface PermissionService {
 	 * and configurable admin OP fallback when {@code bundle.requiresPermission()} is {@code true}.
 	 */
 	boolean hasBlueprintPermission(ServerPlayer player, BlueprintBundleView bundle);
+
+	/**
+	 * Queries an explicit permission provider (e.g., LuckPerms) for {@code playerUuid} without OP fallback.
+	 * Returns empty when no explicit decision exists or the user is unavailable offline.
+	 */
+	Optional<Boolean> checkExplicitPermission(UUID playerUuid, String permissionNode);
 }

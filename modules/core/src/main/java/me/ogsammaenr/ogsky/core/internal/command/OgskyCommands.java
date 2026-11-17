@@ -161,11 +161,6 @@ public final class OgskyCommands implements IslandCommandHelper {
 				.suggests(suggestDimensions())
 				.executes(ctx -> executeHome(ctx, StringArgumentType.getString(ctx, "dimension")))));
 
-		addSub(root, reserved, literalPerm("visit", "ogsky.command.visit", 0)
-			.then(Commands.argument("player", StringArgumentType.word())
-				.suggests(suggestOnlinePlayers())
-				.executes(ctx -> executeVisit(ctx, StringArgumentType.getString(ctx, "player")))));
-
 		addSub(root, reserved, literalPerm("sethome", "ogsky.command.sethome", 0)
 			.executes(this::executeSetHome));
 
@@ -495,35 +490,6 @@ public final class OgskyCommands implements IslandCommandHelper {
 		return reportResult(
 			ctx.getSource(),
 			lifecycleService.teleportHome(ctx.getSource().getServer(), player, island, targetDim)
-		);
-	}
-
-	private int executeVisit(CommandContext<CommandSourceStack> ctx, String targetName) {
-		ServerPlayer player = requirePlayer(ctx.getSource());
-		if (player == null) {
-			return 0;
-		}
-		UUID targetId = resolveTargetUuid(ctx.getSource().getServer(), targetName);
-		if (targetId == null) {
-			sendFailure(ctx.getSource(), "Player '" + targetName + "' was not found.");
-			return 0;
-		}
-		Optional<Island> targetIsland = islandService.grid().findPrimaryIsland(targetId);
-		if (targetIsland.isEmpty()) {
-			sendFailure(ctx.getSource(), targetName + " does not have a Skyblock island.");
-			return 0;
-		}
-		Island island = targetIsland.get();
-		if (!protection.canEnterIsland(island, player)) {
-			String reason = island.isBanned(player.getUUID())
-				? "You are banned from that island."
-				: "That island is currently locked.";
-			sendFailure(ctx.getSource(), reason);
-			return 0;
-		}
-		return reportResult(
-			ctx.getSource(),
-			lifecycleService.teleportHome(ctx.getSource().getServer(), player, island, OgskyDimensions.OVERWORLD)
 		);
 	}
 
@@ -1029,7 +995,7 @@ public final class OgskyCommands implements IslandCommandHelper {
 	private int sendIslandHelp(CommandSourceStack source) {
 		sendHeader(source, "Ogsky Island Commands");
 		sendLine(source, "/is create [bundle], reset [bundle], delete [confirm]");
-		sendLine(source, "/is home [overworld|nether|end], sethome, visit <player>, info [player]");
+		sendLine(source, "/is home [overworld|nether|end], sethome, info [player]");
 		sendLine(source, "/is invite|accept|deny|cancel|kick|leave|coop|uncoop|trust|untrust");
 		sendLine(source, "/is promote|demote|transfer|ban|unban|lock [true|false]|flags|flag <id> <val>");
 		return Command.SINGLE_SUCCESS;

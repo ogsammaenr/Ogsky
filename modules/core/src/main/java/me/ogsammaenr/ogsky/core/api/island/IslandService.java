@@ -4,6 +4,7 @@ import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintBundleView;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import org.jspecify.annotations.Nullable;
@@ -209,6 +210,33 @@ public interface IslandService {
 		ServerPlayer player,
 		UUID islandId,
 		@Nullable ResourceKey<Level> targetDimension
+	);
+
+	/**
+	 * Checks whether {@code player} may enter {@code islandId} under ban, lock, and admin-bypass rules.
+	 */
+	boolean canEnterIsland(UUID islandId, ServerPlayer player);
+
+	/**
+	 * Performs a strict anti-trap safety check at {@code (x, y, z)} in {@code level}, loading covered chunks.
+	 */
+	boolean isLocationSafe(ServerLevel level, double x, double y, double z);
+
+	/**
+	 * Teleports {@code player} to exact island coordinates {@code (x, y, z, yaw, pitch)} in {@code targetDimension},
+	 * optionally enforcing entry access, initializing lazy Nether/End structures, and aborting if unsafe.
+	 */
+	IslandOperationResult<Void> teleportToLocation(
+		MinecraftServer server,
+		ServerPlayer player,
+		UUID islandId,
+		ResourceKey<Level> targetDimension,
+		double x,
+		double y,
+		double z,
+		float yaw,
+		float pitch,
+		boolean enforceEntryAccess
 	);
 
 	/** Updates {@code islandId}'s home spawn relative to {@code player}'s current position inside the island. */

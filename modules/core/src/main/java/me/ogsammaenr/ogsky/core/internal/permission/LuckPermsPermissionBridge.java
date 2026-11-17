@@ -17,6 +17,7 @@ import java.lang.reflect.Method;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -140,6 +141,15 @@ public final class LuckPermsPermissionBridge implements PermissionService {
 		String node = resolveBlueprintNode(bundle);
 		int fallback = bundle.requiresPermission() ? config.admin.fallbackOpLevel : 0;
 		return hasPermission(player, node, fallback);
+	}
+
+	@Override
+	public Optional<Boolean> checkExplicitPermission(UUID playerUuid, String permissionNode) {
+		Objects.requireNonNull(playerUuid, "playerUuid");
+		if (permissionNode == null || permissionNode.isBlank()) {
+			return Optional.empty();
+		}
+		return Optional.ofNullable(externalLookup.check(playerUuid, permissionNode));
 	}
 
 	private static String resolveBlueprintNode(BlueprintBundleView bundle) {

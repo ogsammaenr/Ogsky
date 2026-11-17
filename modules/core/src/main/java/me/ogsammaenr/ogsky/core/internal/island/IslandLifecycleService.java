@@ -27,6 +27,7 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.portal.TeleportTransition;
 import net.minecraft.world.phys.Vec3;
@@ -270,22 +271,12 @@ public final class IslandLifecycleService {
 			return OperationResult.fail("busy", "Island is still being prepared.");
 		}
 		ResourceKey<Level> dimension = targetDimension == null ? OgskyDimensions.OVERWORLD : targetDimension;
-		if (!OgskyDimensions.isSkyblockDimension(dimension)) {
-			return OperationResult.fail("invalid_dimension", "Target must be an ogsky dimension.");
+		OperationResult<ServerLevel> levelResult = resolveAndPrepareDimension(server, island, dimension);
+		if (!levelResult.success() || levelResult.value() == null) {
+			return OperationResult.fail(levelResult.code(), levelResult.message());
 		}
-		ServerLevel level = server.getLevel(dimension);
-		if (level == null) {
-			return OperationResult.fail("missing_dimension", "Skyblock dimension is not loaded: " + dimension.identifier());
-		}
-
+		ServerLevel level = levelResult.value();
 		RelativeSpawn spawn = spawnFor(island, dimension);
-		if (dimension.equals(OgskyDimensions.NETHER) && !island.isNetherReady()) {
-			this.blueprintService.prepareDimension(server, island, dimension, level, spawnToBlockPos(island, spawn));
-			spawn = island.netherSpawn();
-		} else if (dimension.equals(OgskyDimensions.END) && !island.isEndReady()) {
-			this.blueprintService.prepareDimension(server, island, dimension, level, spawnToBlockPos(island, spawn));
-			spawn = island.endSpawn();
-		}
 
 		double targetX = spawn.worldX(island.centerX());
 		double targetY = findSafeLandingY(level, (int) Math.floor(targetX), spawn.blockY(), (int) Math.floor(spawn.worldZ(island.centerZ())), spawn.worldY());
@@ -299,6 +290,68 @@ public final class IslandLifecycleService {
 			TeleportTransition.DO_NOTHING
 		));
 		return OperationResult.ok("teleported", "Teleported to island home.");
+	}
+
+	public OperationResult<Void> teleportToLocation(
+		MinecraftServer server,
+		ServerPlayer player,
+		Island island,
+		ResourceKey<Level> targetDimension,
+		double x,
+		double y,
+		double z,
+		float yaw,
+		float pitch
+	) {
+		Objects.requireNonNull(server, "server");
+		Objects.requireNonNull(player, "player");
+		Objects.requireNonNull(island, "island");
+		Objects.requireNonNull(targetDimension, "targetDimension");
+		if (island.isPasting() || island.isDeleting()) {
+			return OperationResult.fail("busy", "Island is still being prepared.");
+		}
+		if (!island.contains(Mth.floor(x), Mth.floor(z))) {
+			return OperationResult.fail("outside_island", "Target location is outside island bounds.");
+		}
+		OperationResult<ServerLevel> levelResult = resolveAndPrepareDimension(server, island, targetDimension);
+		if (!levelResult.success() || levelResult.value() == null) {
+			return OperationResult.fail(levelResult.code(), levelResult.message());
+		}
+		ServerLevel level = levelResult.value();
+		if (!SafeLocationCheck.isLocationSafe(level, x, y, z)) {
+			return OperationResult.fail("unsafe_location", "Teleport destination is unsafe and was cancelled.");
+		}
+		player.teleport(new TeleportTransition(
+			level,
+			new Vec3(x, y, z),
+			Vec3.ZERO,
+			yaw,
+			pitch,
+			TeleportTransition.DO_NOTHING
+		));
+		player.resetFallDistance();
+		return OperationResult.ok("teleported", "Teleported safely.");
+	}
+
+	private OperationResult<ServerLevel> resolveAndPrepareDimension(
+		MinecraftServer server,
+		Island island,
+		ResourceKey<Level> dimension
+	) {
+		if (!OgskyDimensions.isSkyblockDimension(dimension)) {
+			return OperationResult.fail("invalid_dimension", "Target must be an ogsky dimension.");
+		}
+		ServerLevel level = server.getLevel(dimension);
+		if (level == null) {
+			return OperationResult.fail("missing_dimension", "Skyblock dimension is not loaded: " + dimension.identifier());
+		}
+		RelativeSpawn spawn = spawnFor(island, dimension);
+		if (dimension.equals(OgskyDimensions.NETHER) && !island.isNetherReady()) {
+			this.blueprintService.prepareDimension(server, island, dimension, level, spawnToBlockPos(island, spawn));
+		} else if (dimension.equals(OgskyDimensions.END) && !island.isEndReady()) {
+			this.blueprintService.prepareDimension(server, island, dimension, level, spawnToBlockPos(island, spawn));
+		}
+		return OperationResult.ok("ready", "Dimension ready.", level);
 	}
 
 	public OperationResult<Void> setHome(ServerPlayer player, Island island, boolean bypassRole) {

@@ -12,10 +12,12 @@ import me.ogsammaenr.ogsky.core.internal.blueprint.BlueprintBundle;
 import me.ogsammaenr.ogsky.core.internal.blueprint.CoreBlueprintService;
 import me.ogsammaenr.ogsky.core.internal.config.CoreConfig;
 import me.ogsammaenr.ogsky.core.internal.flag.SimpleFlagRegistry;
+import me.ogsammaenr.ogsky.core.internal.protection.ProtectionResolver;
 import me.ogsammaenr.ogsky.core.internal.world.OgskyDimensions;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import org.jspecify.annotations.Nullable;
@@ -40,6 +42,7 @@ public final class CoreIslandService implements IslandService {
 	private @Nullable CoreBlueprintService blueprintService;
 	private @Nullable IslandLifecycleService lifecycleService;
 	private @Nullable TeamService teamService;
+	private @Nullable ProtectionResolver protectionResolver;
 
 	public CoreIslandService(CoreConfig config, SimpleFlagRegistry flagRegistry, DatabaseService databaseService) {
 		this.config = Objects.requireNonNull(config, "config");
@@ -56,6 +59,10 @@ public final class CoreIslandService implements IslandService {
 		this.blueprintService = Objects.requireNonNull(blueprintService, "blueprintService");
 		this.lifecycleService = Objects.requireNonNull(lifecycleService, "lifecycleService");
 		this.teamService = Objects.requireNonNull(teamService, "teamService");
+	}
+
+	public void bindProtectionResolver(ProtectionResolver protectionResolver) {
+		this.protectionResolver = Objects.requireNonNull(protectionResolver, "protectionResolver");
 	}
 
 	public void initializeWorldSettingsFromDefaults() {
@@ -454,6 +461,53 @@ public final class CoreIslandService implements IslandService {
 		return withIsland(islandId, island ->
 			requireLifecycle().teleportHome(server, player, island, targetDimension).toApiResult()
 		);
+	}
+
+	@Override
+	public boolean canEnterIsland(UUID islandId, ServerPlayer player) {
+		Objects.requireNonNull(islandId, "islandId");
+		Objects.requireNonNull(player, "player");
+		Optional<Island> island = grid.findById(islandId);
+		if (island.isEmpty()) {
+			return false;
+		}
+		if (protectionResolver != null) {
+			return protectionResolver.canEnterIsland(island.get(), player);
+		}
+		return !island.get().isBanned(player.getUUID());
+	}
+
+	@Override
+	public boolean isLocationSafe(ServerLevel level, double x, double y, double z) {
+		Objects.requireNonNull(level, "level");
+		return SafeLocationCheck.isLocationSafe(level, x, y, z);
+	}
+
+	@Override
+	public IslandOperationResult<Void> teleportToLocation(
+		MinecraftServer server,
+		ServerPlayer player,
+		UUID islandId,
+		ResourceKey<Level> targetDimension,
+		double x,
+		double y,
+		double z,
+		float yaw,
+		float pitch,
+		boolean enforceEntryAccess
+	) {
+		return withIsland(islandId, island -> {
+			if (enforceEntryAccess && protectionResolver != null && !protectionResolver.canEnterIsland(island, player)) {
+				String code = island.isBanned(player.getUUID()) ? "banned" : "locked";
+				String msg = island.isBanned(player.getUUID())
+					? "You are banned from that island."
+					: "That island is currently locked.";
+				return IslandOperationResult.fail(code, msg);
+			}
+			return requireLifecycle()
+				.teleportToLocation(server, player, island, targetDimension, x, y, z, yaw, pitch)
+				.toApiResult();
+		});
 	}
 
 	@Override
