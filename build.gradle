@@ -35,6 +35,18 @@ configure(loomProjects) {
 	version = project.version
 
 	repositories {
+		exclusiveContent {
+			forRepositories(
+				mavenLocal(),
+				maven {
+					name = 'oguiWorkspaceM2'
+					url = new File(rootProject.projectDir.parentFile, 'ogui/ui-api/build/m2').toURI()
+				}
+			)
+			filter {
+				includeGroup 'me.ogsammaenr'
+			}
+		}
 		mavenCentral()
 	}
 
@@ -119,7 +131,13 @@ dependencies {
 		include project(":modules:${modName}")
 	}
 
+	if (selectedModules.contains('panel')) {
+		runtimeOnly "me.ogsammaenr:ogui-api:${project.ogui_api_version}"
+		include "me.ogsammaenr:ogui-api:${project.ogui_api_version}"
+	}
+
 	gametestImplementation project(':modules:core')
+	gametestCompileOnly "me.ogsammaenr:ogui-api:${project.ogui_api_version}"
 }
 
 jar {

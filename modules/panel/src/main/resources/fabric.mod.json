@@ -3,7 +3,7 @@
 	"id": "ogsky-panel",
 	"version": "${version}",
 	"name": "Ogsky Panel",
-	"description": "Server-side island control panel module (ChestMenu + ViewModel ready for optional client UI).",
+	"description": "Server-side island control panel module powered by Ogui hybrid client UI + vanilla ChestMenu fallback.",
 	"authors": [
 		"ogsammaenr"
 	],
@@ -14,14 +14,12 @@
 			"me.ogsammaenr.ogsky.panel.OgskyPanelMod"
 		]
 	},
-	"mixins": [
-		"ogsky-panel.mixins.json"
-	],
 	"depends": {
 		"fabricloader": ">=0.20.1",
 		"minecraft": "~26.3",
 		"java": ">=25",
 		"fabric-api": "*",
-		"ogsky-core": "*"
+		"ogsky-core": "*",
+		"ogui-api": "*"
 	}
 }

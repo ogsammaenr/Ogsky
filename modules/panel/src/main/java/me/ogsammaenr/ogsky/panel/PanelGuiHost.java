@@ -1,7 +1,6 @@
 package me.ogsammaenr.ogsky.panel;
 
 import me.ogsammaenr.ogsky.core.api.OgskyCoreApi;
-import me.ogsammaenr.ogsky.core.api.event.IslandDeletedEvent;
 import me.ogsammaenr.ogsky.core.api.gui.GuiBuildContext;
 import me.ogsammaenr.ogsky.core.api.gui.GuiButton;
 import me.ogsammaenr.ogsky.core.api.gui.GuiClickAction;
@@ -12,30 +11,38 @@ import me.ogsammaenr.ogsky.core.api.gui.GuiOpenRequest;
 import me.ogsammaenr.ogsky.core.api.gui.GuiScreenModel;
 import me.ogsammaenr.ogsky.core.api.gui.GuiScreenProvider;
 import me.ogsammaenr.ogsky.core.api.gui.GuiService;
+import me.ogsammaenr.ogsky.core.api.island.IslandView;
+import me.ogsammaenr.ogui.api.Ogui;
+import me.ogsammaenr.ogui.api.OguiBuildContext;
+import me.ogsammaenr.ogui.api.OguiClickAction;
+import me.ogsammaenr.ogui.api.OguiClickContext;
+import me.ogsammaenr.ogui.api.OguiConfirmSpec;
+import me.ogsammaenr.ogui.api.OguiIcon;
+import me.ogsammaenr.ogui.api.OguiOpenRequest;
+import me.ogsammaenr.ogui.api.OguiScreenModel;
+import me.ogsammaenr.ogui.api.OguiService;
+import me.ogsammaenr.ogui.api.OguiText;
+import me.ogsammaenr.ogui.api.OguiTheme;
+import me.ogsammaenr.ogui.api.OguiWidget;
+import net.minecraft.ChatFormatting;
 import net.minecraft.resources.Identifier;
-import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.SimpleMenuProvider;
-import net.minecraft.world.inventory.ContainerInput;
+import net.minecraft.world.item.Items;
 import org.jspecify.annotations.Nullable;
 
-import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * {@link GuiHost} implementation provided by {@code ogsky-panel}, rendering any module-registered
- * {@link GuiScreenModel} through {@link OgskyCustomGuiMenu} with shared dupe protection, pagination,
- * back navigation, confirmations, and live refresh support.
+ * {@link GuiHost} adapter bridging all declarative {@code ogsky-core} {@link GuiScreenModel} screens
+ * onto {@link Ogui#service()} ({@code ogui-client} rich screens + anti-dupe vanilla {@code ChestMenu} fallback).
  */
 public final class PanelGuiHost implements GuiHost {
-	private static final Duration CONFIRM_TTL = Duration.ofSeconds(10);
-
 	public record RenderedScreen(
 		GuiOpenRequest request,
 		GuiScreenModel model,
@@ -52,30 +59,13 @@ public final class PanelGuiHost implements GuiHost {
 		}
 	}
 
-	private record PendingConfirm(Identifier screenId, String targetKey, Instant expiresAt) {
-		boolean isExpired() {
-			return Instant.now().isAfter(expiresAt);
-		}
-	}
-
 	private final OgskyCoreApi core;
 	private final PanelController panelController;
-	private final PanelPreferenceRepository preferences;
-	private final Map<UUID, OgskyCustomGuiMenu> openMenus = new ConcurrentHashMap<>();
-	private final Map<UUID, PendingConfirm> pendingConfirmations = new ConcurrentHashMap<>();
+	private final Set<Identifier> bridgedScreens = ConcurrentHashMap.newKeySet();
 
-	public PanelGuiHost(
-		OgskyCoreApi core,
-		PanelController panelController,
-		PanelPreferenceRepository preferences
-	) {
+	public PanelGuiHost(OgskyCoreApi core, PanelController panelController) {
 		this.core = Objects.requireNonNull(core, "core");
 		this.panelController = Objects.requireNonNull(panelController, "panelController");
-		this.preferences = Objects.requireNonNull(preferences, "preferences");
-	}
-
-	public void registerEvents() {
-		core.events().subscribe(IslandDeletedEvent.class, e -> closeMenusForDeletedIsland(e.islandId()));
 	}
 
 	@Override
@@ -84,81 +74,54 @@ public final class PanelGuiHost implements GuiHost {
 		Objects.requireNonNull(request, "request");
 
 		if (GuiService.MAIN_PANEL_SCREEN_ID.equals(request.screenId())) {
-			openMainPanelFromRequest(player, request);
+			panelController.openMainPanelFromRequest(player, request);
 			return true;
 		}
 
-		Optional<GuiScreenProvider> provider = core.guis().findScreen(request.screenId());
-		if (provider.isEmpty()) {
+		boolean isBuiltInBlueprintScreen = isBuiltInBlueprintScreen(request.screenId());
+		if (!isBuiltInBlueprintScreen && core.guis().findScreen(request.screenId()).isEmpty()) {
 			return false;
 		}
 
-		GuiOpenRequest effectiveRequest = attachMainPanelBackIfNeeded(player, request);
-		RenderedScreen view = buildView(player, provider.get(), effectiveRequest);
-		pendingConfirmations.remove(player.getUUID());
+		if (!isBuiltInBlueprintScreen) {
+			ensureScreenBridged(request.screenId());
+		}
+		OguiService ogui = Ogui.service();
+		OguiOpenRequest oguiRequest = toOguiRequest(request);
+		if (oguiRequest.backRequest() == null) {
+			Optional<OguiOpenRequest> current = ogui.activeRequest(player);
+			if (current.isPresent() && GuiService.isBuiltInScreen(current.get().screenId())) {
+				oguiRequest = oguiRequest.withBackRequest(current.get());
+			}
+		}
+		return ogui.openScreen(player, oguiRequest);
+	}
 
-		player.openMenu(new SimpleMenuProvider(
-			(containerId, playerInventory, p) -> new OgskyCustomGuiMenu(containerId, playerInventory, this, view),
-			view.model().title()
-		));
-		return true;
+	private static boolean isBuiltInBlueprintScreen(Identifier screenId) {
+		return GuiService.CREATE_GALLERY_SCREEN_ID.equals(screenId)
+			|| GuiService.BLUEPRINT_PREVIEW_SCREEN_ID.equals(screenId);
 	}
 
 	@Override
 	public void refreshIslandScreens(UUID islandId) {
 		Objects.requireNonNull(islandId, "islandId");
-		if (openMenus.isEmpty()) {
-			return;
-		}
-		for (OgskyCustomGuiMenu menu : openMenus.values()) {
-			if (islandId.equals(menu.request().islandId())) {
-				MinecraftServer server = menu.viewer().level().getServer();
-				server.execute(() -> refreshMenusForIslandOnServerThread(islandId));
-				return;
-			}
-		}
+		String key = islandId.toString();
+		Ogui.service().refreshMatchingScreens(req -> key.equals(req.contextKey()));
 	}
 
 	@Override
 	public void refreshPlayerScreen(ServerPlayer player, Identifier screenId) {
 		Objects.requireNonNull(player, "player");
 		Objects.requireNonNull(screenId, "screenId");
-		OgskyCustomGuiMenu menu = openMenus.get(player.getUUID());
-		if (menu == null || player.containerMenu != menu) {
-			return;
-		}
-		if (!screenId.equals(menu.request().screenId())) {
-			return;
-		}
-		refreshMenu(menu, menu.request());
-	}
-
-	public void registerOpenMenu(OgskyCustomGuiMenu menu) {
-		openMenus.put(menu.viewer().getUUID(), menu);
-	}
-
-	public void onMenuClosed(OgskyCustomGuiMenu menu) {
-		openMenus.remove(menu.viewer().getUUID(), menu);
-		pendingConfirmations.remove(menu.viewer().getUUID());
+		Ogui.service().refreshPlayerScreen(player, screenId);
 	}
 
 	public void onPlayerDisconnect(UUID playerUuid) {
-		openMenus.remove(playerUuid);
-		pendingConfirmations.remove(playerUuid);
+		// Session cleanup is managed by OguiApiMod.
 	}
 
 	public void clearAll() {
-		openMenus.clear();
-		pendingConfirmations.clear();
-	}
-
-	public boolean isViewerAllowed(@Nullable UUID islandId, UUID viewerUuid) {
-		if (islandId == null) {
-			return true;
-		}
-		return core.islands().findById(islandId)
-			.map(island -> !island.isBanned(viewerUuid))
-			.orElse(true);
+		// Runtime session state is cleared by OguiApiMod on server stop.
 	}
 
 	public static RenderedScreen paginateModel(GuiOpenRequest request, GuiScreenModel model) {
@@ -176,297 +139,209 @@ public final class PanelGuiHost implements GuiHost {
 		return new RenderedScreen(request.withPage(page), model, page, totalPages, all.subList(from, to));
 	}
 
-	void handleClick(
-		OgskyCustomGuiMenu menu,
-		ServerPlayer player,
-		int slotIndex,
-		int buttonNum,
-		ContainerInput input
-	) {
-		if (!player.getUUID().equals(menu.viewer().getUUID())) {
+	private void ensureScreenBridged(Identifier screenId) {
+		if (GuiService.MAIN_PANEL_SCREEN_ID.equals(screenId)) {
 			return;
 		}
-		if (buttonNum != 0 && buttonNum != 1) {
-			return;
-		}
-
-		RenderedScreen current = menu.view();
-		GuiOpenRequest request = current.request();
-		GuiScreenModel model = current.model();
-
-		if (model.layoutMode() == GuiScreenModel.LayoutMode.PAGED_GRID) {
-			if (slotIndex == OgskyReadOnlyChestMenu.SLOT_CLOSE) {
-				PanelFeedback.playClickSound(player);
-				pendingConfirmations.remove(player.getUUID());
-				if (request.backRequest() != null) {
-					openScreen(player, request.backRequest());
-				} else {
-					player.closeContainer();
-				}
-				return;
-			}
-			if (slotIndex == OgskyReadOnlyChestMenu.SLOT_PREV_PAGE && current.hasPreviousPage()) {
-				PanelFeedback.playClickSound(player);
-				pendingConfirmations.remove(player.getUUID());
-				refreshMenu(menu, request.withPage(current.page() - 1));
-				return;
-			}
-			if (slotIndex == OgskyReadOnlyChestMenu.SLOT_NEXT_PAGE && current.hasNextPage()) {
-				PanelFeedback.playClickSound(player);
-				pendingConfirmations.remove(player.getUUID());
-				refreshMenu(menu, request.withPage(current.page() + 1));
-				return;
-			}
-			if (slotIndex == OgskyReadOnlyChestMenu.SLOT_PAGE_INDICATOR || slotIndex == OgskyReadOnlyChestMenu.SLOT_REFRESH) {
-				PanelFeedback.playClickSound(player);
-				pendingConfirmations.remove(player.getUUID());
-				refreshMenu(menu, request);
-				return;
-			}
-			if (slotIndex == OgskyReadOnlyChestMenu.SLOT_CONTEXT_CONTROL && model.contextButton() != null) {
-				dispatchButtonClick(menu, player, model.contextButton(), buttonNum, input);
-				return;
-			}
-		}
-
-		GuiButton pinned = model.pinnedButtons().get(slotIndex);
-		if (pinned != null) {
-			dispatchButtonClick(menu, player, pinned, buttonNum, input);
-			return;
-		}
-
-		if (model.layoutMode() == GuiScreenModel.LayoutMode.PAGED_GRID) {
-			int contentIdx = menu.contentIndexForSlot(slotIndex);
-			if (contentIdx >= 0 && contentIdx < current.pagedSlice().size()) {
-				dispatchButtonClick(menu, player, current.pagedSlice().get(contentIdx), buttonNum, input);
-			}
+		if (bridgedScreens.add(screenId)) {
+			Ogui.service().registerScreen(screenId, oguiCtx -> buildOguiScreen(screenId, oguiCtx));
 		}
 	}
 
-	private void dispatchButtonClick(
-		OgskyCustomGuiMenu menu,
-		ServerPlayer player,
-		GuiButton button,
-		int buttonNum,
-		ContainerInput input
-	) {
-		if (button.onClick() == null) {
-			return;
-		}
-		GuiConfirmSpec confirmSpec = button.confirmSpec();
-		if (confirmSpec != null) {
-			String activeKey = activeConfirmKey(player.getUUID(), menu.request().screenId());
-			if (!confirmSpec.targetKey().equals(activeKey)) {
-				pendingConfirmations.put(
-					player.getUUID(),
-					new PendingConfirm(menu.request().screenId(), confirmSpec.targetKey(), Instant.now().plus(CONFIRM_TTL))
-				);
-				PanelFeedback.playClickSound(player);
-				refreshMenu(menu, menu.request());
-				return;
-			}
-			pendingConfirmations.remove(player.getUUID());
-		}
-
-		PanelFeedback.playClickSound(player);
-		GuiClickAction action = mapClickAction(buttonNum, input);
-		GuiClickContext ctx = new GuiClickContextImpl(menu, player, action);
-		button.onClick().accept(ctx);
-		if (openMenus.get(player.getUUID()) == menu && player.containerMenu == menu) {
-			menu.broadcastChanges();
-		}
-	}
-
-	private void refreshMenu(OgskyCustomGuiMenu menu, GuiOpenRequest targetRequest) {
-		Optional<GuiScreenProvider> provider = core.guis().findScreen(targetRequest.screenId());
+	private OguiScreenModel buildOguiScreen(Identifier screenId, OguiBuildContext oguiCtx) {
+		Optional<GuiScreenProvider> provider = core.guis().findScreen(screenId);
 		if (provider.isEmpty()) {
-			menu.viewer().closeContainer();
-			return;
+			return OguiScreenModel.fixedGrid("Screen Unavailable", 3)
+				.slot(13, OguiWidget.button("unavailable", OguiIcon.item(Items.BARRIER), OguiText.nonItalic("Screen Not Registered", ChatFormatting.RED))
+					.onClick(OguiClickContext::goBack)
+					.build())
+				.build();
 		}
-		RenderedScreen nextView = buildView(menu.viewer(), provider.get(), targetRequest);
-		String confirmKey = activeConfirmKey(menu.viewer().getUUID(), targetRequest.screenId());
-		menu.renderView(nextView, menu.viewer().level().getServer(), confirmKey);
+
+		UUID islandId = parseUuid(oguiCtx.contextKey());
+		UUID backIslandId = parseUuid(oguiCtx.backContextKey());
+		if (islandId != null && !isViewerAllowed(islandId, oguiCtx.viewer().getUUID())) {
+			return OguiScreenModel.fixedGrid("Access Denied", 3)
+				.slot(13, OguiWidget.button("denied", OguiIcon.item(Items.BARRIER), OguiText.nonItalic("You are banned from this island.", ChatFormatting.RED))
+					.onClick(OguiClickContext::close)
+					.build())
+				.build();
+		}
+
+		GuiBuildContext coreCtx = new GuiBuildContext(
+			oguiCtx.viewer(),
+			islandId,
+			oguiCtx.requestedPage(),
+			oguiCtx.state(),
+			oguiCtx.backScreenId(),
+			backIslandId
+		);
+		GuiScreenModel coreModel = Objects.requireNonNull(
+			provider.get().build(coreCtx),
+			() -> "GuiScreenProvider returned null model for " + screenId
+		);
+		return translateModel(coreCtx, coreModel);
 	}
 
-	private RenderedScreen buildView(
-		ServerPlayer viewer,
-		GuiScreenProvider provider,
-		GuiOpenRequest request
-	) {
-		GuiBuildContext context = new GuiBuildContext(
-			viewer,
-			request.islandId(),
+	private boolean isViewerAllowed(UUID islandId, UUID viewerUuid) {
+		Optional<IslandView> island = core.islands().findById(islandId);
+		return island.map(v -> !v.isBanned(viewerUuid)).orElse(true);
+	}
+
+	private OguiScreenModel translateModel(GuiBuildContext coreCtx, GuiScreenModel coreModel) {
+		if (coreModel.layoutMode() == GuiScreenModel.LayoutMode.CUSTOM_FIXED) {
+			OguiScreenModel.FixedGridBuilder fixed = OguiScreenModel.fixedGrid(
+				OguiText.nonItalic(coreModel.title()),
+				coreModel.rows()
+			).theme(OguiTheme.builder()
+				.accentColor(0xFF38BDF8)
+				.subtitle("Ogsky Skyblock")
+				.build());
+
+			for (Map.Entry<Integer, GuiButton> entry : coreModel.pinnedButtons().entrySet()) {
+				fixed.slot(
+					entry.getKey(),
+					toOguiButton("fixed_" + entry.getKey(), entry.getValue())
+				);
+			}
+			return fixed.build();
+		}
+
+		OguiScreenModel.PagedGridBuilder paged = OguiScreenModel.pagedGrid(OguiText.nonItalic(coreModel.title()))
+			.theme(OguiTheme.builder()
+				.accentColor(0xFF38BDF8)
+				.subtitle("Ogsky Skyblock")
+				.build());
+
+		if (GuiService.MAIN_PANEL_SCREEN_ID.equals(coreCtx.backScreenId())) {
+			paged.backLabel(OguiText.nonItalic("Back to Control Panel", ChatFormatting.YELLOW));
+		}
+
+		for (Map.Entry<Integer, GuiButton> entry : coreModel.pinnedButtons().entrySet()) {
+			int slot = entry.getKey();
+			OguiWidget.ButtonWidget widget = toOguiButton("pin_" + slot, entry.getValue());
+			if (slot >= 45) {
+				paged.addFooterWidget(widget, slot);
+			} else {
+				paged.addHeaderWidget(widget, slot);
+			}
+		}
+
+		if (coreModel.contextButton() != null) {
+			paged.addFooterWidget(toOguiButton("context", coreModel.contextButton()), 47);
+		}
+
+		List<GuiButton> entries = coreModel.pagedEntries();
+		for (int i = 0; i < entries.size(); i++) {
+			paged.addEntry(toOguiButton("entry_" + i, entries.get(i)));
+		}
+
+		if (coreModel.emptyStateButton() != null) {
+			paged.emptyState(toOguiButton("empty", coreModel.emptyStateButton()));
+		}
+
+		return paged.build();
+	}
+
+	private OguiWidget.ButtonWidget toOguiButton(String widgetId, GuiButton button) {
+		OguiIcon baseIcon = (button.playerHeadUuid() != null && button.iconItemId().endsWith("player_head"))
+			? OguiIcon.playerHead(button.playerHeadUuid())
+			: OguiIcon.item(button.iconItemId());
+		OguiIcon icon = baseIcon.withCount(button.count()).withGlowing(button.glowing());
+
+		OguiWidget.ButtonWidget.Builder builder = OguiWidget.button(
+			widgetId,
+			icon,
+			OguiText.nonItalic(button.name())
+		);
+		for (var line : button.lore()) {
+			builder.lore(OguiText.nonItalic(line));
+		}
+		GuiConfirmSpec confirm = button.confirmSpec();
+		if (confirm != null) {
+			builder.confirm(OguiConfirmSpec.of(confirm.targetKey(), confirm.promptLine()));
+		}
+		if (button.onClick() != null) {
+			builder.onClick(oguiClick -> button.onClick().accept(new BridgedClickContext(oguiClick)));
+		}
+		return builder.build();
+	}
+
+	private OguiOpenRequest toOguiRequest(GuiOpenRequest request) {
+		OguiOpenRequest back = request.backRequest() == null ? null : toOguiRequest(request.backRequest());
+		return new OguiOpenRequest(
+			request.screenId(),
+			uuidToString(request.islandId()),
 			request.page(),
 			request.state(),
-			request.backScreenId(),
-			request.backIslandId()
+			back
 		);
-		GuiScreenModel model = Objects.requireNonNull(
-			provider.build(context),
-			() -> "GuiScreenProvider returned null model for " + request.screenId()
-		);
-		return paginateModel(request, model);
 	}
 
-	private void openMainPanelFromRequest(ServerPlayer player, GuiOpenRequest request) {
-		PanelPreferences prefs = preferences.cached(player.getUUID())
-			.orElseGet(() -> PanelPreferences.defaults(player.getUUID()));
-		String tabRaw = request.state().get("tab");
-		PanelTab tab = tabRaw != null ? PanelTab.fromDbKey(tabRaw) : prefs.preferredTab();
-		if (request.islandId() == null) {
-			tab = PanelTab.BLUEPRINTS_INFO;
-		}
-		FlagModeFilter flagMode = FlagModeFilter.fromDbKey(request.state().getOrDefault("flagMode", prefs.flagMode().name()));
-		int page = parseIntOrZero(request.state().get("page"));
-		panelController.openPanel(player, request.islandId(), tab, flagMode, page);
+	private static @Nullable String uuidToString(@Nullable UUID uuid) {
+		return uuid == null ? null : uuid.toString();
 	}
 
-	private static GuiOpenRequest attachMainPanelBackIfNeeded(ServerPlayer player, GuiOpenRequest request) {
-		if (request.backRequest() != null) {
-			return request;
-		}
-		if (player.containerMenu instanceof OgskyPanelMenu panelMenu) {
-			PanelSnapshot snap = panelMenu.snapshot();
-			GuiOpenRequest back = new GuiOpenRequest(
-				GuiService.MAIN_PANEL_SCREEN_ID,
-				snap.islandId(),
-				0,
-				Map.of(
-					"tab", snap.activeTab().id(),
-					"flagMode", snap.flagMode().name(),
-					"page", Integer.toString(snap.page())
-				),
-				null
-			);
-			return request.withBackRequest(back);
-		}
-		return request;
-	}
-
-	private void refreshMenusForIslandOnServerThread(UUID islandId) {
-		for (OgskyCustomGuiMenu menu : openMenus.values()) {
-			if (!islandId.equals(menu.request().islandId())) {
-				continue;
-			}
-			ServerPlayer viewer = menu.viewer();
-			if (viewer.containerMenu != menu) {
-				openMenus.remove(viewer.getUUID(), menu);
-				continue;
-			}
-			if (!isViewerAllowed(islandId, viewer.getUUID())) {
-				PanelFeedback.sendFeedback(viewer, false, "Your access to that island was revoked.");
-				viewer.closeContainer();
-				continue;
-			}
-			refreshMenu(menu, menu.request());
-		}
-	}
-
-	private void closeMenusForDeletedIsland(UUID islandId) {
-		if (openMenus.isEmpty()) {
-			return;
-		}
-		for (OgskyCustomGuiMenu menu : openMenus.values()) {
-			if (islandId.equals(menu.request().islandId())) {
-				MinecraftServer server = menu.viewer().level().getServer();
-				server.execute(() -> {
-					for (OgskyCustomGuiMenu open : openMenus.values()) {
-						if (islandId.equals(open.request().islandId()) && open.viewer().containerMenu == open) {
-							PanelFeedback.sendFeedback(open.viewer(), false, "The island you were viewing was deleted.");
-							open.viewer().closeContainer();
-						}
-					}
-				});
-				return;
-			}
-		}
-	}
-
-	private @Nullable String activeConfirmKey(UUID playerUuid, Identifier screenId) {
-		PendingConfirm confirm = pendingConfirmations.get(playerUuid);
-		if (confirm == null) {
-			return null;
-		}
-		if (confirm.isExpired() || !screenId.equals(confirm.screenId())) {
-			pendingConfirmations.remove(playerUuid, confirm);
-			return null;
-		}
-		return confirm.targetKey();
-	}
-
-	private static GuiClickAction mapClickAction(int buttonNum, ContainerInput input) {
-		if (input == ContainerInput.QUICK_MOVE) {
-			return buttonNum == 1 ? GuiClickAction.SHIFT_RIGHT : GuiClickAction.SHIFT_LEFT;
-		}
-		return buttonNum == 1 ? GuiClickAction.RIGHT : GuiClickAction.LEFT;
-	}
-
-	private static int parseIntOrZero(@Nullable String raw) {
+	private static @Nullable UUID parseUuid(@Nullable String raw) {
 		if (raw == null || raw.isBlank()) {
-			return 0;
+			return null;
 		}
 		try {
-			return Math.max(0, Integer.parseInt(raw.trim()));
-		} catch (NumberFormatException ignored) {
-			return 0;
+			return UUID.fromString(raw.trim());
+		} catch (IllegalArgumentException ignored) {
+			return null;
 		}
 	}
 
-	private final class GuiClickContextImpl implements GuiClickContext {
-		private final OgskyCustomGuiMenu menu;
-		private final ServerPlayer actor;
-		private final GuiClickAction clickAction;
+	private static GuiClickAction mapClickAction(OguiClickAction action) {
+		return switch (action) {
+			case RIGHT -> GuiClickAction.RIGHT;
+			case SHIFT_LEFT -> GuiClickAction.SHIFT_LEFT;
+			case SHIFT_RIGHT -> GuiClickAction.SHIFT_RIGHT;
+			case LEFT, CLIENT_INPUT -> GuiClickAction.LEFT;
+		};
+	}
 
-		private GuiClickContextImpl(
-			OgskyCustomGuiMenu menu,
-			ServerPlayer actor,
-			GuiClickAction clickAction
-		) {
-			this.menu = menu;
-			this.actor = actor;
-			this.clickAction = clickAction;
+	private final class BridgedClickContext implements GuiClickContext {
+		private final OguiClickContext delegate;
+
+		private BridgedClickContext(OguiClickContext delegate) {
+			this.delegate = delegate;
 		}
 
 		@Override
 		public ServerPlayer actor() {
-			return actor;
+			return delegate.actor();
 		}
 
 		@Override
 		public @Nullable UUID islandId() {
-			return menu.request().islandId();
+			return parseUuid(delegate.contextKey());
 		}
 
 		@Override
 		public GuiClickAction clickAction() {
-			return clickAction;
+			return mapClickAction(delegate.clickAction());
 		}
 
 		@Override
 		public int currentPage() {
-			return menu.view().page();
+			return delegate.currentPage();
 		}
 
 		@Override
 		public Map<String, String> state() {
-			return menu.request().state();
+			return delegate.state();
 		}
 
 		@Override
 		public void refresh() {
-			if (openMenus.get(actor.getUUID()) == menu && actor.containerMenu == menu) {
-				refreshMenu(menu, menu.request());
-			}
+			delegate.refresh();
 		}
 
 		@Override
 		public void refreshWithState(String key, String value) {
-			Objects.requireNonNull(key, "key");
-			Objects.requireNonNull(value, "value");
-			pendingConfirmations.remove(actor.getUUID());
-			if (openMenus.get(actor.getUUID()) == menu && actor.containerMenu == menu) {
-				refreshMenu(menu, menu.request().withState(key, value));
-			}
+			delegate.refreshWithState(key, value);
 		}
 
 		@Override
@@ -478,31 +353,33 @@ public final class PanelGuiHost implements GuiHost {
 		@Override
 		public void openScreen(GuiOpenRequest nextRequest) {
 			Objects.requireNonNull(nextRequest, "nextRequest");
-			GuiOpenRequest resolved = nextRequest;
-			if (resolved.backRequest() == null && !GuiService.MAIN_PANEL_SCREEN_ID.equals(resolved.screenId())) {
-				resolved = resolved.withBackRequest(menu.request());
+			if (GuiService.MAIN_PANEL_SCREEN_ID.equals(nextRequest.screenId())) {
+				panelController.openMainPanelFromRequest(delegate.actor(), nextRequest);
+				return;
 			}
-			PanelGuiHost.this.openScreen(actor, resolved);
+			boolean isBuiltInBlueprintScreen = isBuiltInBlueprintScreen(nextRequest.screenId());
+			if (!isBuiltInBlueprintScreen && core.guis().findScreen(nextRequest.screenId()).isEmpty()) {
+				return;
+			}
+			if (!isBuiltInBlueprintScreen) {
+				ensureScreenBridged(nextRequest.screenId());
+			}
+			delegate.openScreen(toOguiRequest(nextRequest));
 		}
 
 		@Override
 		public void goBack() {
-			GuiOpenRequest back = menu.request().backRequest();
-			if (back != null) {
-				PanelGuiHost.this.openScreen(actor, back);
-			} else {
-				actor.closeContainer();
-			}
+			delegate.goBack();
 		}
 
 		@Override
 		public void close() {
-			actor.closeContainer();
+			delegate.close();
 		}
 
 		@Override
 		public void sendFeedback(boolean success, String message) {
-			PanelFeedback.applyMutationFeedback(actor, success, message);
+			PanelFeedback.applyMutationFeedback(delegate.actor(), success, message);
 		}
 	}
 }

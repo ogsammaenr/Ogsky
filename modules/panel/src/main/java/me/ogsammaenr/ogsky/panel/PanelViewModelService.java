@@ -40,6 +40,22 @@ public final class PanelViewModelService {
 		"pvp", "PvP"
 	);
 
+	public record PanelViewData(
+		@Nullable UUID islandId,
+		PanelSnapshot.@Nullable IslandSummary island,
+		UUID viewerUuid,
+		byte viewerRole,
+		boolean viewerAdminBypass,
+		PanelTab activeTab,
+		FlagModeFilter flagMode,
+		List<PanelSnapshot.ActionEntry> actions,
+		List<PanelSnapshot.ProtectionFlagEntry> protectionFlags,
+		List<PanelSnapshot.SettingFlagEntry> settingFlags,
+		List<PanelSnapshot.MemberEntry> members,
+		List<PanelSnapshot.BlueprintEntry> blueprints
+	) {
+	}
+
 	private final OgskyCoreApi core;
 
 	public PanelViewModelService(OgskyCoreApi core) {
@@ -49,6 +65,92 @@ public final class PanelViewModelService {
 	/**
 	 * Builds a first-page {@link PanelTab#ACTIONS} snapshot using default resolver functions (primarily for unit tests).
 	 */
+	/**
+	 * Builds unpaginated, optionally search-filtered panel view data for connected viewers (used by Ogui screens).
+	 */
+	public PanelViewData buildFullData(
+		@Nullable UUID islandId,
+		ServerPlayer viewer,
+		PanelTab activeTab,
+		FlagModeFilter flagMode,
+		@Nullable String searchQuery
+	) {
+		Objects.requireNonNull(viewer, "viewer");
+		Objects.requireNonNull(activeTab, "activeTab");
+		Objects.requireNonNull(flagMode, "flagMode");
+
+		MinecraftServer server = viewer.level().getServer();
+		boolean viewerAdminBypass = core.permissions().isBypassActive(viewer);
+		UUID viewerUuid = viewer.getUUID();
+		String normalizedQuery = searchQuery == null ? "" : searchQuery.trim().toLowerCase(Locale.ROOT);
+
+		IslandView island = islandId == null ? null : core.islands().findById(islandId).orElse(null);
+		byte viewerRole = island == null ? IslandRole.VISITOR : island.roleOf(viewerUuid);
+		PanelSnapshot.IslandSummary summary = island == null
+			? null
+			: buildSummary(island, viewerUuid, viewerRole, viewerAdminBypass, uuid -> resolvePlayerName(server, uuid));
+
+		List<PanelSnapshot.ActionEntry> actions = List.of();
+		List<PanelSnapshot.ProtectionFlagEntry> protectionFlags = List.of();
+		List<PanelSnapshot.SettingFlagEntry> settingFlags = List.of();
+		List<PanelSnapshot.MemberEntry> members = List.of();
+		List<PanelSnapshot.BlueprintEntry> blueprints = List.of();
+
+		switch (activeTab) {
+			case ACTIONS -> actions = buildActionEntries(island, summary).stream()
+				.filter(e -> normalizedQuery.isEmpty() || containsAny(normalizedQuery, e.title(), e.description(), e.actionId().toString()))
+				.toList();
+			case PROTECTION_FLAGS -> protectionFlags = buildProtectionFlags(island, viewerRole, viewerAdminBypass, flagMode).stream()
+				.filter(e -> normalizedQuery.isEmpty() || containsAny(normalizedQuery, e.title(), e.flagId().toString(), e.minRankName()))
+				.toList();
+			case SETTING_FLAGS -> settingFlags = buildSettingFlags(island, viewerRole, viewerAdminBypass, flagMode).stream()
+				.filter(e -> normalizedQuery.isEmpty() || containsAny(normalizedQuery, e.title(), e.flagId().toString()))
+				.toList();
+			case MEMBERS -> members = buildMembers(island, viewerUuid, viewerRole, viewerAdminBypass, uuid -> resolvePlayerName(server, uuid)).stream()
+				.filter(e -> normalizedQuery.isEmpty() || containsAny(normalizedQuery, e.displayName(), e.roleName()))
+				.toList();
+			case BLUEPRINTS_INFO -> blueprints = buildBlueprints(island, bundle -> core.permissions().hasBlueprintPermission(viewer, bundle)).stream()
+				.filter(e -> normalizedQuery.isEmpty() || containsAny(normalizedQuery, e.displayName(), e.description(), e.id()))
+				.toList();
+		}
+
+		return new PanelViewData(
+			island == null ? null : island.islandId(),
+			summary,
+			viewerUuid,
+			viewerRole,
+			viewerAdminBypass,
+			activeTab,
+			flagMode,
+			actions,
+			protectionFlags,
+			settingFlags,
+			members,
+			blueprints
+		);
+	}
+
+	private static boolean containsAny(String query, String... fields) {
+		for (String field : fields) {
+			if (field != null && field.toLowerCase(Locale.ROOT).contains(query)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private List<PanelSnapshot.ActionEntry> buildActionEntries(
+		@Nullable IslandView island,
+		PanelSnapshot.@Nullable IslandSummary summary
+	) {
+		if (island == null) {
+			return List.of();
+		}
+		return core.actions().listOrdered().stream()
+			.map(descriptor -> buildActionEntry(descriptor, summary))
+			.toList();
+	}
+
 	public PanelSnapshot buildSnapshot(UUID islandId) {
 		Objects.requireNonNull(islandId, "islandId");
 		UUID viewerUuid = core.islands().findById(islandId)
@@ -116,11 +218,7 @@ public final class PanelViewModelService {
 
 		return switch (activeTab) {
 			case ACTIONS -> {
-				List<PanelSnapshot.ActionEntry> all = island == null
-					? List.of()
-					: core.actions().listOrdered().stream()
-						.map(descriptor -> buildActionEntry(descriptor, summary))
-						.toList();
+				List<PanelSnapshot.ActionEntry> all = buildActionEntries(island, summary);
 				PageSlice<PanelSnapshot.ActionEntry> slice = paginate(all, requestedPage);
 				yield new PanelSnapshot(
 					island == null ? null : island.islandId(),
