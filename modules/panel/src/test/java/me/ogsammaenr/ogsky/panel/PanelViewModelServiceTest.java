@@ -2,6 +2,7 @@ package me.ogsammaenr.ogsky.panel;
 
 import me.ogsammaenr.ogsky.core.api.OgskyCore;
 import me.ogsammaenr.ogsky.core.api.action.IslandActionDescriptor;
+import me.ogsammaenr.ogsky.core.api.action.IslandActionPresentation;
 import me.ogsammaenr.ogsky.core.api.db.ModuleDatabase;
 import me.ogsammaenr.ogsky.core.api.flag.FlagMode;
 import me.ogsammaenr.ogsky.core.api.island.IslandOperationResult;
@@ -434,5 +435,44 @@ class PanelViewModelServiceTest {
 			List.of("Level: 42 (" + IslandRole.OWNER + ")", "Rank: #3"),
 			snapshot.island().contributedLines().stream().map(Component::getString).toList()
 		);
+	}
+
+	@Test
+	void dynamicActionPresenterDrivesViewerSpecificActionEntries() throws Exception {
+		createDummyBundle("default", false);
+		UUID ownerId = UUID.randomUUID();
+		IslandView island = createIsland(ownerId, "default");
+
+		final boolean[] state = { false };
+		core.actions().register(
+			new IslandActionDescriptor(
+				OgskyCore.id("custom_toggle"),
+				"Custom Toggle",
+				"Static desc",
+				"minecraft:gray_stained_glass",
+				19,
+				false,
+				ctx -> { }
+			),
+			(viewerUuid, viewedIsland) -> state[0]
+				? IslandActionPresentation.toggle("Custom Toggle: ON", "Active", "minecraft:lime_stained_glass", true, "Enabled", "ON")
+				: IslandActionPresentation.toggle("Custom Toggle: OFF", "Inactive", "minecraft:gray_stained_glass", false, "Disabled", "OFF")
+		);
+
+		PanelSnapshot offSnap = viewModels.buildSnapshot(island.islandId());
+		PanelSnapshot.ActionEntry offEntry = offSnap.actions().getFirst();
+		assertEquals("Custom Toggle: OFF", offEntry.title());
+		assertEquals(Boolean.FALSE, offEntry.activeState());
+		assertEquals("OFF", offEntry.badgeLabel());
+		assertFalse(offEntry.invertActiveColor());
+
+		state[0] = true;
+		PanelSnapshot onSnap = viewModels.buildSnapshot(island.islandId());
+		PanelSnapshot.ActionEntry onEntry = onSnap.actions().getFirst();
+		assertEquals("Custom Toggle: ON", onEntry.title());
+		assertEquals("minecraft:lime_stained_glass", onEntry.iconItemId());
+		assertEquals(Boolean.TRUE, onEntry.activeState());
+		assertEquals("ON", onEntry.badgeLabel());
+		assertEquals("Enabled", onEntry.stateLabel());
 	}
 }

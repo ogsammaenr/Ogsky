@@ -3,6 +3,7 @@ package me.ogsammaenr.ogsky.panel;
 import me.ogsammaenr.ogsky.core.api.OgskyCore;
 import me.ogsammaenr.ogsky.core.api.OgskyCoreApi;
 import me.ogsammaenr.ogsky.core.api.action.IslandActionDescriptor;
+import me.ogsammaenr.ogsky.core.api.action.IslandActionPresentation;
 import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintBundleView;
 import me.ogsammaenr.ogsky.core.api.flag.FlagType;
 import me.ogsammaenr.ogsky.core.api.flag.IslandFlagDefinition;
@@ -24,6 +25,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -97,7 +99,7 @@ public final class PanelViewModelService {
 		List<PanelSnapshot.BlueprintEntry> blueprints = List.of();
 
 		switch (activeTab) {
-			case ACTIONS -> actions = buildActionEntries(island, summary).stream()
+			case ACTIONS -> actions = buildActionEntries(viewerUuid, island, summary).stream()
 				.filter(e -> normalizedQuery.isEmpty() || containsAny(normalizedQuery, e.title(), e.description(), e.actionId().toString()))
 				.toList();
 			case PROTECTION_FLAGS -> protectionFlags = buildProtectionFlags(island, viewerRole, viewerAdminBypass, flagMode).stream()
@@ -140,6 +142,7 @@ public final class PanelViewModelService {
 	}
 
 	private List<PanelSnapshot.ActionEntry> buildActionEntries(
+		UUID viewerUuid,
 		@Nullable IslandView island,
 		PanelSnapshot.@Nullable IslandSummary summary
 	) {
@@ -147,7 +150,7 @@ public final class PanelViewModelService {
 			return List.of();
 		}
 		return core.actions().listOrdered().stream()
-			.map(descriptor -> buildActionEntry(descriptor, summary))
+			.map(descriptor -> buildActionEntry(viewerUuid, descriptor, island, summary))
 			.toList();
 	}
 
@@ -218,7 +221,7 @@ public final class PanelViewModelService {
 
 		return switch (activeTab) {
 			case ACTIONS -> {
-				List<PanelSnapshot.ActionEntry> all = buildActionEntries(island, summary);
+				List<PanelSnapshot.ActionEntry> all = buildActionEntries(viewerUuid, island, summary);
 				PageSlice<PanelSnapshot.ActionEntry> slice = paginate(all, requestedPage);
 				yield new PanelSnapshot(
 					island == null ? null : island.islandId(),
@@ -325,10 +328,27 @@ public final class PanelViewModelService {
 		};
 	}
 
-	private static PanelSnapshot.ActionEntry buildActionEntry(
+	private PanelSnapshot.ActionEntry buildActionEntry(
+		UUID viewerUuid,
 		IslandActionDescriptor descriptor,
+		IslandView island,
 		PanelSnapshot.@Nullable IslandSummary summary
 	) {
+		Optional<IslandActionPresentation> presented = core.actions().present(descriptor.id(), viewerUuid, island);
+		if (presented.isPresent()) {
+			IslandActionPresentation view = presented.get();
+			return new PanelSnapshot.ActionEntry(
+				descriptor.id(),
+				view.title(),
+				view.description(),
+				view.iconItemId(),
+				descriptor.closePanelOnExecute(),
+				view.activeState(),
+				view.stateLabel(),
+				view.badgeLabel(),
+				view.invertActiveColor()
+			);
+		}
 		if (summary != null && TOGGLE_LOCK_ACTION.equals(descriptor.id())) {
 			boolean locked = summary.locked();
 			return new PanelSnapshot.ActionEntry(

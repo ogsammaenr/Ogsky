@@ -708,27 +708,35 @@ public final class PanelController {
 		PanelViewModelService.PanelViewData data
 	) {
 		List<Component> lore = new ArrayList<>();
-		if (entry.activeState() != null) {
-			boolean active = entry.activeState();
-			lore.add(OguiText.nonItalic("State: " + (active ? "LOCKED" : "UNLOCKED"), active ? ChatFormatting.RED : ChatFormatting.GREEN));
+		Boolean activeState = entry.activeState();
+		ChatFormatting titleColor = ChatFormatting.AQUA;
+		boolean glint = false;
+		if (activeState != null) {
+			boolean active = activeState;
+			boolean positiveIsActive = !entry.invertActiveColor();
+			ChatFormatting stateColor = (active == positiveIsActive) ? ChatFormatting.GREEN : ChatFormatting.RED;
+			String stateText = entry.stateLabel() != null ? entry.stateLabel() : (active ? "LOCKED" : "UNLOCKED");
+			lore.add(OguiText.nonItalic("State: " + stateText, stateColor));
+			titleColor = stateColor;
+			glint = active;
 		}
 		if (!entry.description().isBlank()) {
 			lore.add(OguiText.nonItalic(entry.description(), ChatFormatting.GRAY));
 		}
 		lore.add(OguiText.nonItalic("Action ID: " + entry.actionId(), ChatFormatting.DARK_GRAY));
 		lore.add(OguiText.nonItalic("Click to execute", ChatFormatting.YELLOW));
-		ChatFormatting titleColor = entry.activeState() == null
-			? ChatFormatting.AQUA
-			: (entry.activeState() ? ChatFormatting.RED : ChatFormatting.GREEN);
-		boolean glint = Boolean.TRUE.equals(entry.activeState());
 
 		OguiWidget.ButtonWidget.Builder b = OguiWidget.button(
 			"action_" + index,
 			OguiIcon.item(entry.iconItemId()).withGlowing(glint),
 			OguiText.nonItalic(entry.title(), titleColor)
 		).lore(lore);
-		if (entry.activeState() != null) {
-			b.badge(entry.activeState() ? "LOCKED" : "OPEN", entry.activeState() ? ChatFormatting.RED : ChatFormatting.GREEN);
+		if (activeState != null) {
+			boolean active = activeState;
+			boolean positiveIsActive = !entry.invertActiveColor();
+			ChatFormatting badgeColor = (active == positiveIsActive) ? ChatFormatting.GREEN : ChatFormatting.RED;
+			String badgeText = entry.badgeLabel() != null ? entry.badgeLabel() : (active ? "LOCKED" : "OPEN");
+			b.badge(badgeText, badgeColor);
 		}
 		b.onClick(click -> handleActionClick(click, data, entry));
 		return b.build();

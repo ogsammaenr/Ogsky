@@ -144,7 +144,10 @@ public record PanelSnapshot(
 		String description,
 		String iconItemId,
 		boolean closePanelOnExecute,
-		@Nullable Boolean activeState
+		@Nullable Boolean activeState,
+		@Nullable String stateLabel,
+		@Nullable String badgeLabel,
+		boolean invertActiveColor
 	) {
 		public ActionEntry(
 			Identifier actionId,
@@ -153,7 +156,18 @@ public record PanelSnapshot(
 			String iconItemId,
 			boolean closePanelOnExecute
 		) {
-			this(actionId, title, description, iconItemId, closePanelOnExecute, null);
+			this(actionId, title, description, iconItemId, closePanelOnExecute, null, null, null, true);
+		}
+
+		public ActionEntry(
+			Identifier actionId,
+			String title,
+			String description,
+			String iconItemId,
+			boolean closePanelOnExecute,
+			@Nullable Boolean activeState
+		) {
+			this(actionId, title, description, iconItemId, closePanelOnExecute, activeState, null, null, true);
 		}
 
 		public static ActionEntry fromDescriptor(IslandActionDescriptor descriptor) {
