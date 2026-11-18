@@ -217,8 +217,9 @@ Cross-module optional API example (`me.ogsammaenr.ogsky.core.api.level`):
   - `Optional<IslandView> primaryIsland(ServerPlayer player)`
   - `Optional<IslandView> islandAt(ServerPlayer player)`
 - **`IslandActionRegistry`** & **`IslandActionDescriptor`**:
-  - `register(IslandActionDescriptor)`, `listOrdered()` *(sorted by `sortOrder` then `id.toString()`)*, `find(Identifier)`.
+  - `register(IslandActionDescriptor)`, `register(IslandActionDescriptor, IslandActionPresenter)`, `registerPresenter(Identifier, IslandActionPresenter)`, `present(Identifier, UUID, IslandView)`, `listOrdered()` *(sorted by `sortOrder` then `id.toString()`)*, `find(Identifier)`.
   - `IslandActionDescriptor(Identifier id, String title, String description, String iconItemId, int sortOrder, boolean closePanelOnExecute, IslandActionHandler handler)` + 5-arg convenience constructor (`description = ""`, `closePanelOnExecute = false`).
+  - `IslandActionPresentation(String title, String description, String iconItemId, @Nullable Boolean activeState, @Nullable String stateLabel, @Nullable String badgeLabel, boolean invertActiveColor)` for viewer-aware dynamic button state in panels.
   - `IslandActionHandler.execute(IslandActionContext(ServerPlayer actor, UUID islandId))`.
 
 ---

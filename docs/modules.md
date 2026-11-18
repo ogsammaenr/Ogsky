@@ -1,6 +1,6 @@
 # Ogsky Module Architecture, Wiring & Extension Guide (`docs/modules.md`)
 
-This document explains how `modules/core` (`ogsky-core`) and the optional feature modules (`panel`, `level`, `limits`, `warps`) wire together at compile time and runtime without violating module isolation, and documents each module's configuration, commands, permissions, SQLite schema, and step-by-step extension pattern.
+This document explains how `modules/core` (`ogsky-core`) and the optional feature modules (`border`, `panel`, `level`, `limits`, `warps`) wire together at compile time and runtime without violating module isolation, and documents each module's configuration, commands, permissions, SQLite schema, and step-by-step extension pattern.
 
 Related specs:
 - [Core Public API Reference](core-api.md)
@@ -15,8 +15,8 @@ Related specs:
 
 Ogsky builds on a multi-project Gradle workspace (`settings.gradle`) where every optional module is compiled independently against `:modules:core` and selectively packaged via Fabric Jar-in-Jar (`include`):
 
-- **Allowed modules (`build.gradle` `availableModules`):** `core`, `panel`, `level`, `limits`, `warps`
-- **Default enabled bundle (`gradle.properties` `enabled_modules`):** `core,panel,level,limits,warps`
+- **Allowed modules (`build.gradle` `availableModules`):** `core`, `panel`, `level`, `limits`, `warps`, `border`
+- **Default enabled bundle (`gradle.properties` `enabled_modules`):** `core,panel,level,limits,warps,border`
 - **`core` invariant:** `core` is always added to `selectedModules` automatically, even if omitted from `-Pmodules=...`. Unknown module names fail fast at configuration time.
 
 ```bash
@@ -46,6 +46,7 @@ flowchart TD
     Level["ogsky-level (Block Scoring, /is top Leaderboard, IslandLevelProvider)"]
     Limits["ogsky-limits (Physical Block and Entity Placement Limits)"]
     Warps["ogsky-warps (Multi-Warp Showcase, Safe Teleport, Particle Markers)"]
+    Border["ogsky-border (Per-Player Vanilla WorldBorder Island Boundary Display)"]
     LP["LuckPerms / fabric-permission-api-v1 (Optional Runtime)"]
     DB[("<world>/ogsky/data/<moduleId>.db (Isolated SQLite WAL Files)")]
 
@@ -53,12 +54,14 @@ flowchart TD
     Level -->|depends strictly on| Core
     Limits -->|depends strictly on| Core
     Warps -->|depends strictly on| Core
+    Border -->|depends strictly on| Core
     Core -.->|reflection / Fabric API| LP
     Core -->|core.db| DB
     Panel -->|panel.db| DB
     Level -->|level.db| DB
     Limits -->|limits.db| DB
     Warps -->|warps.db| DB
+    Border -->|border.db| DB
 ```
 
 ### Deterministic Load Order (`OgskyCoreMod`)
@@ -66,21 +69,23 @@ flowchart TD
 `OgskyCoreMod` loads all `"ogsky-module"` entrypoints sorted alphabetically by `OgskyModule.moduleId()`:
 
 1. `core` initializes config, registries, built-in flags, and built-in actions (`island_home`, `island_home_nether`, `island_home_end`, `island_sethome`, `island_toggle_lock`).
-2. `level` (`moduleId = "level"`) registers `level.db`, `IslandLevelService`, `IslandLevelProvider`, commands, GUI screens, actions, summary contributor, and event listeners.
-3. `limits` (`moduleId = "limits"`) registers `limits.db`, flag `ogsky_limits:view_limits`, `IslandLimitService`, all 4 `WorldMutationService` hooks, commands, GUI screen, action, summary contributor, and event listeners.
-4. `panel` (`moduleId = "panel"`) registers `panel.db`, `PanelViewModelService`, `PanelController`, `PanelGuiHost` into `core.guis().registerHost(...)`, `/is panel` & `/is settings`, and event refresh listeners.
-5. `warps` (`moduleId = "warps"`) registers `warps.db`, flags `ogsky_warps:manage_warps` & `ogsky_warps:use_warp`, `IslandWarpService`, `/is warp` & `/is warps` & `/is setwarp` & `/is delwarp`, GUI screens, actions, summary contributor, particle marker/warmup tick handlers, and lifecycle listeners.
-6. `core` freezes `FlagRegistry`, initializes `WORLD_SETTING` defaults, and mounts Brigadier `/is` & `/isadmin` subcommands.
+2. `border` (`moduleId = "border"`) registers `border.db`, `IslandBorderService`, `/is border` & `/isadmin border` commands, dynamic `ogsky_border:toggle_border` panel action, `ogsky_border:summary`, and player/island lifecycle sync listeners.
+3. `level` (`moduleId = "level"`) registers `level.db`, `IslandLevelService`, `IslandLevelProvider`, commands, GUI screens, actions, summary contributor, and event listeners.
+4. `limits` (`moduleId = "limits"`) registers `limits.db`, flag `ogsky_limits:view_limits`, `IslandLimitService`, all 4 `WorldMutationService` hooks, commands, GUI screen, action, summary contributor, and event listeners.
+5. `panel` (`moduleId = "panel"`) registers `panel.db`, `PanelViewModelService`, `PanelController`, `PanelGuiHost` into `core.guis().registerHost(...)`, `/is panel` & `/is settings`, and event refresh listeners.
+6. `warps` (`moduleId = "warps"`) registers `warps.db`, flags `ogsky_warps:manage_warps` & `ogsky_warps:use_warp`, `IslandWarpService`, `/is warp` & `/is warps` & `/is setwarp` & `/is delwarp`, GUI screens, actions, summary contributor, particle marker/warmup tick handlers, and lifecycle listeners.
+7. `core` freezes `FlagRegistry`, initializes `WORLD_SETTING` defaults, and mounts Brigadier `/is` & `/isadmin` subcommands.
 
 ### Cross-Module Wiring Matrix
 
 | Capability / Contract | Provider Module | Registered ID / Contract | Consumer Modules & Behavior |
 | :--- | :--- | :--- | :--- |
 | **Action Entries (`/is panel` Actions Tab)** | `core` | `ogsky:island_home` (10), `ogsky:island_home_nether` (12), `ogsky:island_home_end` (14), `ogsky:island_sethome` (16), `ogsky:island_toggle_lock` (18) | Rendered by `ogsky-panel` (`PanelViewModelService`) in `ACTIONS` tab. |
+| **Action Entries** | `border` | `ogsky_border:toggle_border` (19) with dynamic `IslandActionPresenter` | Rendered by `ogsky-panel` in `ACTIONS` tab with live `ON`/`OFF` badge & colored glass icon. |
 | **Action Entries** | `level` | `ogsky:island_level` (20), `ogsky_level:island_top` (22), `ogsky_level:block_values` (24) | Rendered by `ogsky-panel`; opens `core.guis()` screens or falls back to chat if absent. |
 | **Action Entries** | `limits` | `ogsky_limits:island_limits` (30) | Rendered by `ogsky-panel`; opens `ogsky_limits:overview` or falls back to chat. |
 | **Action Entries** | `warps` | `ogsky_warps:showcase` (40), `ogsky_warps:manage_warps` (42) | Rendered by `ogsky-panel`; opens showcase/management screens or falls back to chat. |
-| **Slot-8 Island Summary Contributors** | `level`, `limits`, `warps` | `ogsky_level:summary` (sortOrder `20`), `ogsky_limits:summary` (sortOrder `30`), `ogsky_warps:summary` (sortOrder `40`) | Collected dynamically via `core.guis().collectSummaryLines(ctx)` by `OgskyPanelMenu` slot `8`. |
+| **Slot-8 Island Summary Contributors** | `level`, `limits`, `warps`, `border` | `ogsky_level:summary` (`20`), `ogsky_limits:summary` (`30`), `ogsky_warps:summary` (`40`), `ogsky_border:summary` (`50`) | Collected dynamically via `core.guis().collectSummaryLines(ctx)` by `OgskyPanelMenu` slot `8`. |
 | **Custom Declarative Screens** | `level`, `limits`, `warps` | `ogsky_level:top`, `ogsky_level:detail`, `ogsky_level:values`, `ogsky_limits:overview`, `ogsky_warps:showcase`, `ogsky_warps:manage`, `ogsky_warps:edit` | Rendered via `PanelGuiHost` (`OgskyCustomGuiMenu`) when `ogsky-panel` is loaded (`core.guis().isAvailable()`). |
 | **GUI Host (`GuiHost`)** | `panel` | `PanelGuiHost` registered on `core.guis()` + `GuiService.MAIN_PANEL_SCREEN_ID` (`ogsky:main_panel`) | Used transparently by `level`, `limits`, and `warps` via `core.guis().openScreen(...)` & `refreshIslandScreens(...)`. |
 | **Optional Service (`ServiceRegistry`)** | `level` | `IslandLevelProvider` (`core.services().find(IslandLevelProvider.class)`) | Consumed optionally by `limits` (limit scaling) and `warps` (Island Level showcase sorting & lore). |
@@ -93,9 +98,9 @@ flowchart TD
 | Event | Published By | Subscribed By | Effect |
 | :--- | :--- | :--- | :--- |
 | `BlueprintPasteCompletedEvent` | `core` | `level`, `limits` | `level` auto-calculates initial level (if `autoScanOnPasteComplete`); `limits` schedules initial 3D block & entity scan (if `autoScanOnBlueprintComplete`). |
-| `IslandResetEvent` | `core` | `core` (`scanService`), `level`, `limits`, `panel`, `warps` | Cancels active scans, clears old level/limit/warp state & DB rows, refreshes open panel menus. |
-| `IslandDeletedEvent` | `core` | `core` (`scanService`), `level`, `limits`, `panel`, `warps` | Cancels active scans, deletes per-island rows in `level.db`, `limits.db`, and `warps.db`, closes open panel/GUI menus for the deleted island. |
-| `IslandRangeChangeEvent` | `core` | `limits`, `panel`, `warps` | `limits` schedules async rescan for resized bounds; `warps` & `panel` refresh open menus and enforce out-of-bounds hiding. |
+| `IslandResetEvent` | `core` | `core` (`scanService`), `level`, `limits`, `panel`, `warps`, `border` | Cancels active scans, clears old level/limit/warp state & DB rows, refreshes open panel menus and re-syncs player borders. |
+| `IslandDeletedEvent` | `core` | `core` (`scanService`), `level`, `limits`, `panel`, `warps`, `border` | Cancels active scans, deletes per-island rows in `level.db`, `limits.db`, and `warps.db`, closes open panel/GUI menus, and clears deleted island borders. |
+| `IslandRangeChangeEvent` | `core` | `limits`, `panel`, `warps`, `border` | `limits` schedules async rescan for resized bounds; `warps` & `panel` refresh open menus; `border` re-syncs client border sizes live. |
 | `IslandLevelCalculatedEvent` | `level` | `panel` | Triggers `scheduleIslandRefresh(islandId)` so slot `8` summary shows the updated level live. |
 | `TeamOwnerChangeEvent` | `core` | `panel`, `warps` | `panel` refreshes open menus; `warps` recalculates owner warp cap snapshot and refreshes GUI owner head/labels. |
 | `IslandLockChangedEvent`, `IslandProtectionFlagChangedEvent`, `IslandSettingFlagChangedEvent`, `IslandBanEvent`, `IslandUnbanEvent`, `TeamJoinEvent`, `TeamKickEvent`, `TeamLeaveEvent`, `TeamRankChangeEvent` | `core` | `panel` | Refreshes open `OgskyPanelMenu` instances for affected islands. |
@@ -251,6 +256,23 @@ All player commands sit under `/island` (alias `/is`); admin commands sit under 
 - **SQLite Schema (`warps.db`, moduleId `"warps"`):**
   - `ogsky_warps(island_id, slug, display_name, dimension_id, rel_x, y, rel_z, yaw, pitch, category_id, icon_item_id, description, enabled, is_default, visit_count, created_by, created_at, updated_at, PK(island_id, slug))` + `idx_ogsky_warps_island`
   - `ogsky_warp_island_meta(island_id PK, cached_max_warps, updated_at)`
+
+---
+
+### 3.6 `modules/border` (`ogsky-border`)
+
+- **Configuration: `config/ogsky/border.json` ([`BorderConfig`](../modules/border/src/main/java/me/ogsammaenr/ogsky/border/BorderConfig.java)):**
+  - `enabled` (`true`), `defaultEnabledForPlayers` (`false`), `defaultColor` (`"BLUE"`, valid: `BLUE`, `GREEN`, `RED`), `allowColorSelection` (`true`).
+  - Dimensions: `allowInOverworld` (`true`), `allowInNether` (`true`), `allowInEnd` (`true`).
+  - Client warning thresholds: `warningBlocks` (`0`), `warningTime` (`0`).
+- **Commands & Permissions ([`BorderCommands`](../modules/border/src/main/java/me/ogsammaenr/ogsky/border/BorderCommands.java)):**
+  - `/is border [on|off|toggle|status|color <blue|green|red>]` — permissions `ogsky.command.border` & `ogsky.command.border.color` (fallback OP `0`).
+  - `/isadmin border reload | inspect <player> | toggle <player> [on|off]` — permission `ogsky.admin.border` (fallback OP `2`).
+- **Behavior & GUI Integrations:**
+  - Sends per-player virtual `ClientboundInitializeBorderPacket` aligned to the occupied island's exact block perimeter (`centerX + 0.5, centerZ + 0.5`, `halfSize * 2 + 1`), automatically updating on island entry/exit, dimension transitions, respawn, and `IslandRangeChangeEvent`, and restoring `level.getWorldBorder()` when toggled off or outside island bounds.
+  - Summary: `ogsky_border:summary` (`sortOrder = 50`); Action: `ogsky_border:toggle_border` (`sortOrder = 19`) with dynamic `IslandActionPresenter` (`ON`/`OFF` badge and color-matched glass icon).
+- **SQLite Schema (`border.db`, moduleId `"border"`):**
+  - `ogsky_border_preferences(player_uuid PK, enabled, color, updated_at)`
 
 ---
 

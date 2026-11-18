@@ -11,6 +11,7 @@
 | `level` | `ogsky-level` | Block-worth evaluation, `/is level` / `/is top` / `/is values`, `IslandLevelProvider` service & `level.db` |
 | `limits` | `ogsky-limits` | Physical per-island block & entity placement limits, liquid generator policies, optional level scaling & `limits.db` |
 | `warps` | `ogsky-warps` | Multi-warp showcase, category/sort GUIs, warmup/cooldown safe teleport, particle markers, `manage_warps`/`use_warp` flags & `warps.db` |
+| `border` | `ogsky-border` | Per-player client-side Vanilla `WorldBorder` island boundary display (`Blue`/`Green`/`Red`), `/is border` command, panel action toggle & `border.db` |
 
 ## Documentation
 

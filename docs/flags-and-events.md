@@ -177,6 +177,7 @@ Rather than building a custom string parser, `core` mounts native Minecraft **Br
   - `level` *(optional)*: `/is level [player]` (`lvl`), `/is top [page]` (`leaderboard`), `/is values [page | search <query>]` (`value`, `worth`), `/isadmin level scan|scanall|reload`.
   - `limits` *(optional)*: `/is limits [page|all|blocks|entities|chat|search <query>]` (`limit`), `/isadmin limits reload|rescanall|rescan <player>|inspect <player> [page]`.
   - `warps` *(optional)*: `/is warp <player> [warp]`, `/is warps [chat|category|search|player|mine|show|set|remove|edit]`, `/is setwarp [name] [category]`, `/is delwarp [name]`, `/isadmin warps reload|inspect|delete|toggle`.
+  - `border` *(optional)*: `/is border [on|off|toggle|status|color <blue|green|red>]`, `/isadmin border reload|inspect <player>|toggle <player> [on|off]`.
   - When `core` is built alone (`-Pmodules=core`), optional module subcommands simply aren't registered while all core `/is` & `/isadmin` commands function normally.
 
 ### World Mutation Interceptors (`OgskyCore.api().mutations()`)
