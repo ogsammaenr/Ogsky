@@ -1,5 +1,6 @@
 package me.ogsammaenr.ogsky.core;
 
+import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintStructureData;
 import me.ogsammaenr.ogsky.core.api.island.RelativeSpawn;
 import me.ogsammaenr.ogsky.core.internal.blueprint.BlueprintBundle;
 import me.ogsammaenr.ogsky.core.internal.blueprint.BlueprintBundleRegistry;
@@ -10,13 +11,17 @@ import me.ogsammaenr.ogsky.core.internal.flag.BuiltinFlags;
 import me.ogsammaenr.ogsky.core.internal.flag.SimpleFlagRegistry;
 import me.ogsammaenr.ogsky.core.internal.island.Island;
 import me.ogsammaenr.ogsky.core.internal.world.OgskyDimensions;
+import net.minecraft.SharedConstants;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.IntTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.StringTag;
+import net.minecraft.server.Bootstrap;
+import net.minecraft.world.level.block.Blocks;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -230,6 +235,95 @@ class BlueprintBundleRegistryTest {
 			island.gridZ()
 		);
 		assertEquals("§aWelcome §fOgsam §7(Starter Island)", BlueprintSignSupport.formatLine("&aWelcome &f{player} &7({bundle})", ctx));
+	}
+
+	@Test
+	void previewPngValidationPathTraversalAndStructureExtractionWork() throws Exception {
+		SharedConstants.tryDetectVersion();
+		Bootstrap.bootStrap();
+
+		Path blueprintsRoot = this.tempDir.resolve("blueprints_preview");
+		BlueprintBundleRegistry registry = new BlueprintBundleRegistry(blueprintsRoot, "alpha");
+		assertEquals(0L, registry.revision());
+
+		// 1. Valid bundle with default preview.png, stone, air, oak_log, welcome sign, and [SPAWN] sign
+		Path alphaDir = blueprintsRoot.resolve("alpha");
+		Files.createDirectories(alphaDir);
+		byte[] validPng = new byte[] {
+			(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+			0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52
+		};
+		Files.write(alphaDir.resolve("preview.png"), validPng);
+		writeStructureNbt(
+			alphaDir.resolve("overworld.nbt"),
+			new Vec3i(4, 3, 4),
+			List.of(
+				paletteEntry("minecraft:stone", Map.of()),
+				paletteEntry("minecraft:air", Map.of()),
+				paletteEntry("minecraft:oak_sign", Map.of("rotation", "0", "waterlogged", "false")),
+				paletteEntry("minecraft:grass_block", Map.of("snowy", "false"))
+			),
+			List.of(
+				blockEntry(0, 0, 0, 0, null),
+				blockEntry(1, 0, 0, 1, null),
+				blockEntry(1, 1, 0, 2, signNbt(List.of("[SPAWN]", "", "", ""), List.of("", "", "", ""))),
+				blockEntry(2, 1, 0, 2, signNbt(List.of("[WELCOME]", "Hi", "", ""), List.of("", "", "", ""))),
+				blockEntry(2, 0, 2, 3, null)
+			)
+		);
+
+		// 2. Bundle with invalid PNG header -> bundle stays loaded without preview PNG
+		Path badPngDir = blueprintsRoot.resolve("bad_png");
+		Files.createDirectories(badPngDir);
+		Files.writeString(badPngDir.resolve("bundle.json"), """
+			{ "id": "bad_png", "previewImage": "fake.png" }
+			""");
+		Files.write(badPngDir.resolve("fake.png"), new byte[] { 0x47, 0x49, 0x46, 0x38 });
+		writeStructureNbt(badPngDir.resolve("overworld.nbt"), new Vec3i(1, 1, 1), List.of(paletteEntry("minecraft:stone", Map.of())), List.of(blockEntry(0, 0, 0, 0, null)));
+
+		// 3. Bundle attempting path traversal previewImage="../../outside.png"
+		Path outsidePng = this.tempDir.resolve("outside.png");
+		Files.write(outsidePng, validPng);
+		Path escapeDir = blueprintsRoot.resolve("escape_png");
+		Files.createDirectories(escapeDir);
+		Files.writeString(escapeDir.resolve("bundle.json"), """
+			{ "id": "escape_png", "previewImage": "../../outside.png" }
+			""");
+		writeStructureNbt(escapeDir.resolve("overworld.nbt"), new Vec3i(1, 1, 1), List.of(paletteEntry("minecraft:stone", Map.of())), List.of(blockEntry(0, 0, 0, 0, null)));
+
+		registry.reload();
+		assertEquals(1L, registry.revision());
+
+		BlueprintBundle alpha = registry.find("alpha").orElseThrow();
+		assertTrue(alpha.hasPreviewImage());
+		assertTrue(alpha.toView().hasPreviewImage());
+		byte[] loadedPng = alpha.findPreviewPngBytes().orElseThrow();
+		assertEquals(validPng.length, loadedPng.length);
+		loadedPng[0] = 0; // Defensive copy check
+		assertEquals((byte) 0x89, alpha.findPreviewPngBytes().orElseThrow()[0]);
+
+		BlueprintStructureData structure = alpha.overworld().extractStructureData(BuiltInRegistries.BLOCK);
+		assertEquals(4, structure.sizeX());
+		assertEquals(3, structure.sizeY());
+		assertEquals(4, structure.sizeZ());
+		// Should keep stone, [WELCOME] sign, grass_block; must omit air and [SPAWN] marker sign.
+		assertEquals(3, structure.blocks().size());
+		assertTrue(structure.blocks().stream().anyMatch(b -> b.state().getBlock().equals(Blocks.STONE) && b.x() == 0 && b.y() == 0 && b.z() == 0));
+		assertTrue(structure.blocks().stream().anyMatch(b -> b.state().getBlock().equals(Blocks.OAK_SIGN) && b.x() == 2 && b.y() == 1 && b.z() == 0));
+		assertTrue(structure.blocks().stream().anyMatch(b -> b.state().getBlock().equals(Blocks.GRASS_BLOCK) && b.x() == 2 && b.y() == 0 && b.z() == 2));
+		assertFalse(structure.blocks().stream().anyMatch(b -> b.x() == 1 && b.y() == 1 && b.z() == 0));
+
+		BlueprintBundle badPng = registry.find("bad_png").orElseThrow();
+		assertFalse(badPng.hasPreviewImage());
+		assertFalse(badPng.toView().hasPreviewImage());
+		assertTrue(badPng.hasOverworld());
+
+		BlueprintBundle escapePng = registry.find("escape_png").orElseThrow();
+		assertFalse(escapePng.hasPreviewImage());
+		assertTrue(escapePng.hasOverworld());
+
+		registry.reload();
+		assertEquals(2L, registry.revision());
 	}
 
 	private static Island createTestIsland(int centerX, int centerZ, String bundleId) {

@@ -1,6 +1,8 @@
 package me.ogsammaenr.ogsky.core.api.island;
 
 import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintBundleView;
+import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintDimension;
+import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintStructureData;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
@@ -55,6 +57,24 @@ public interface IslandService {
 
 	/** Lists all discovered and loaded blueprint bundles available for island creation/reset. */
 	List<BlueprintBundleView> availableBlueprints();
+
+	/** Returns the monotonically increasing blueprint registry revision incremented on every startup/reload. */
+	default long blueprintRevision() {
+		return 0L;
+	}
+
+	/** Returns validated PNG preview bytes cached in RAM for {@code bundleId}, if configured and present. */
+	default Optional<byte[]> findBlueprintPreviewPng(String bundleId) {
+		return Optional.empty();
+	}
+
+	/**
+	 * Decodes non-air structure blocks for {@code bundleId} and {@code dimension}, omitting internal
+	 * {@code [SPAWN]} anchor signs for interactive 3D preview generation.
+	 */
+	default Optional<BlueprintStructureData> readBlueprintStructure(String bundleId, BlueprintDimension dimension) {
+		return Optional.empty();
+	}
 
 	/** Returns whether global {@code WORLD_SETTING} flag {@code flagId} is currently enabled. */
 	boolean isWorldSettingEnabled(Identifier flagId);

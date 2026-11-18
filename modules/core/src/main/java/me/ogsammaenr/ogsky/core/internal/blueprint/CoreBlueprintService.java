@@ -2,6 +2,7 @@ package me.ogsammaenr.ogsky.core.internal.blueprint;
 
 import me.ogsammaenr.ogsky.core.api.OgskyCore;
 import me.ogsammaenr.ogsky.core.api.db.DatabaseService;
+import me.ogsammaenr.ogsky.core.api.event.BlueprintsReloadedEvent;
 import me.ogsammaenr.ogsky.core.api.event.IslandDimensionInitEvent;
 import me.ogsammaenr.ogsky.core.api.event.OgskyEventBus;
 import me.ogsammaenr.ogsky.core.api.island.IslandView;
@@ -81,6 +82,7 @@ public final class CoreBlueprintService implements PortalRouter.LazyDimensionHan
 		this.registry.reload(server != null ? server.getFixerUpper() : null);
 		this.paster.clear();
 		this.cleanupQueue = new ChunkCleanupQueue(this.config, this.islandService.grid(), this.databaseService);
+		this.eventBus.publish(new BlueprintsReloadedEvent(this.registry.revision(), this.registry.listAll().size()));
 	}
 
 	public void onServerStopping() {

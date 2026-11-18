@@ -19,20 +19,26 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
 
 /**
  * Discovers, validates, and eagerly compresses {@link BlueprintBundle} definitions under {@code config/ogsky/blueprints/}
- * into compact in-memory {@link CompressedBlueprint} objects during startup and reloads.
+ * into compact in-memory {@link CompressedBlueprint} objects and validated PNG previews during startup and reloads.
  * Never generates starter {@code .nbt} content automatically; warns cleanly when the configured default bundle
- * does not yet contain a valid {@code overworld.nbt}.
+ * does not yet contain a valid {@code overworld.nbt} or when a bundle lacks a preview PNG.
  */
 public final class BlueprintBundleRegistry {
+	public static final int MAX_PREVIEW_PNG_BYTES = 2 * 1024 * 1024;
+	private static final byte[] PNG_MAGIC = new byte[] {
+		(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
+	};
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
 	private final Path blueprintsDir;
 	private final String defaultBundleId;
 	private final Map<String, BlueprintBundle> bundles = new LinkedHashMap<>();
+	private final AtomicLong revision = new AtomicLong(0L);
 
 	public BlueprintBundleRegistry(Path blueprintsDir, String defaultBundleId) {
 		this.blueprintsDir = Objects.requireNonNull(blueprintsDir, "blueprintsDir").toAbsolutePath().normalize();
@@ -45,6 +51,10 @@ public final class BlueprintBundleRegistry {
 
 	public String defaultBundleId() {
 		return this.defaultBundleId;
+	}
+
+	public long revision() {
+		return this.revision.get();
 	}
 
 	public synchronized void reload() {
@@ -80,6 +90,8 @@ public final class BlueprintBundleRegistry {
 				this.bundles.put(bundle.id(), bundle);
 			}
 		}
+
+		this.revision.incrementAndGet();
 
 		BlueprintBundle defaultBundle = this.bundles.get(this.defaultBundleId);
 		if (defaultBundle == null || !defaultBundle.hasOverworld()) {
@@ -156,7 +168,8 @@ public final class BlueprintBundleRegistry {
 		if (overworld == null && nether == null && end == null && !hasManifest) {
 			return null;
 		}
-		return new BlueprintBundle(metadata.id, dir, metadata, overworld, nether, end);
+		byte @Nullable [] previewPng = loadPreviewPng(dir, metadata);
+		return new BlueprintBundle(metadata.id, dir, metadata, overworld, nether, end, previewPng);
 	}
 
 	private static @Nullable CompressedBlueprint loadCompressedNbt(
@@ -165,7 +178,7 @@ public final class BlueprintBundleRegistry {
 		String relativeFile,
 		@Nullable DataFixer fixerUpper
 	) {
-		Path resolved = resolveExistingNbt(bundleDir, relativeFile);
+		Path resolved = resolveExistingBundleFile(bundleDir, relativeFile, "blueprint NBT");
 		if (resolved == null) {
 			return null;
 		}
@@ -183,13 +196,73 @@ public final class BlueprintBundleRegistry {
 		}
 	}
 
-	private static @Nullable Path resolveExistingNbt(Path bundleDir, String relativeFile) {
+	private static byte @Nullable [] loadPreviewPng(Path bundleDir, BlueprintBundleMetadata metadata) {
+		Path resolved = resolveExistingBundleFile(bundleDir, metadata.previewImage, "preview PNG");
+		if (resolved == null) {
+			OgskyCore.LOGGER.warn(
+				"Blueprint bundle '{}' has no preview image '{}' under {}; falling back to icon item '{}'.",
+				metadata.id,
+				metadata.previewImage,
+				bundleDir,
+				metadata.iconItem
+			);
+			return null;
+		}
+		try {
+			long size = Files.size(resolved);
+			if (size <= 0L || size > MAX_PREVIEW_PNG_BYTES) {
+				OgskyCore.LOGGER.warn(
+					"Blueprint bundle '{}' preview image '{}' size {} B is out of range (1..{} B); falling back to icon item '{}'.",
+					metadata.id,
+					resolved.getFileName(),
+					size,
+					MAX_PREVIEW_PNG_BYTES,
+					metadata.iconItem
+				);
+				return null;
+			}
+			byte[] bytes = Files.readAllBytes(resolved);
+			if (!isValidPng(bytes)) {
+				OgskyCore.LOGGER.warn(
+					"Blueprint bundle '{}' preview image '{}' is not a valid PNG file; falling back to icon item '{}'.",
+					metadata.id,
+					resolved.getFileName(),
+					metadata.iconItem
+				);
+				return null;
+			}
+			return bytes;
+		} catch (IOException ex) {
+			OgskyCore.LOGGER.warn(
+				"Failed to read preview image '{}' for blueprint bundle '{}': {}; falling back to icon item '{}'.",
+				resolved,
+				metadata.id,
+				ex.getMessage(),
+				metadata.iconItem
+			);
+			return null;
+		}
+	}
+
+	private static boolean isValidPng(byte[] bytes) {
+		if (bytes.length < PNG_MAGIC.length) {
+			return false;
+		}
+		for (int i = 0; i < PNG_MAGIC.length; i++) {
+			if (bytes[i] != PNG_MAGIC[i]) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static @Nullable Path resolveExistingBundleFile(Path bundleDir, String relativeFile, String kindLabel) {
 		if (relativeFile == null || relativeFile.isBlank()) {
 			return null;
 		}
 		Path resolved = bundleDir.resolve(relativeFile).normalize();
 		if (!resolved.startsWith(bundleDir)) {
-			OgskyCore.LOGGER.warn("Rejected out-of-bundle blueprint path '{}' in {}", relativeFile, bundleDir);
+			OgskyCore.LOGGER.warn("Rejected out-of-bundle {} path '{}' in {}", kindLabel, relativeFile, bundleDir);
 			return null;
 		}
 		return Files.isRegularFile(resolved) ? resolved : null;

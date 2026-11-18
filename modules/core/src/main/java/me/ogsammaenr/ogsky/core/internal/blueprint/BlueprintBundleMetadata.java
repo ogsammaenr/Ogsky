@@ -10,6 +10,7 @@ public final class BlueprintBundleMetadata {
 	public String displayName = "";
 	public String description = "";
 	public String iconItem = "minecraft:grass_block";
+	public String previewImage = "preview.png";
 	public boolean requiresPermission = false;
 	public String permissionNode = "";
 	public int order = 0;
@@ -32,6 +33,9 @@ public final class BlueprintBundleMetadata {
 		}
 		if (iconItem == null || iconItem.isBlank()) {
 			iconItem = "minecraft:grass_block";
+		}
+		if (previewImage == null || previewImage.isBlank()) {
+			previewImage = "preview.png";
 		}
 		if (permissionNode == null) {
 			permissionNode = "";

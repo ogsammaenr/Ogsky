@@ -1,6 +1,8 @@
 package me.ogsammaenr.ogsky.core.internal.blueprint;
 
 import com.mojang.datafixers.DataFixer;
+import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintStructureData;
+import me.ogsammaenr.ogsky.core.mixin.StructureTemplateAccessor;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderGetter;
@@ -12,6 +14,7 @@ import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.NbtUtils;
 import net.minecraft.util.datafix.DataFixTypes;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.SignBlock;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate;
 import org.jspecify.annotations.Nullable;
 
@@ -118,6 +121,33 @@ public final class CompressedBlueprint {
 		StructureTemplate template = new StructureTemplate();
 		template.load(blockLookup, tag);
 		return template;
+	}
+
+	/**
+	 * Decodes non-air structure blocks for 3D UI preview generation, omitting {@code [SPAWN]} anchor signs
+	 * that are stripped during island pasting.
+	 */
+	public BlueprintStructureData extractStructureData(HolderGetter<Block> blockLookup) throws IOException {
+		StructureTemplate template = toStructureTemplate(blockLookup);
+		List<StructureTemplate.Palette> palettes = ((StructureTemplateAccessor) template).ogsky$getPalettes();
+		if (palettes.isEmpty()) {
+			return new BlueprintStructureData(size.getX(), size.getY(), size.getZ(), List.of());
+		}
+		List<StructureTemplate.StructureBlockInfo> rawBlocks = palettes.getFirst().blocks();
+		List<BlueprintStructureData.PositionedBlock> out = new ArrayList<>(rawBlocks.size());
+		for (StructureTemplate.StructureBlockInfo info : rawBlocks) {
+			if (info.state().isAir()) {
+				continue;
+			}
+			if (info.state().getBlock() instanceof SignBlock
+				&& info.nbt() != null
+				&& BlueprintSignSupport.isSpawnSign(info.nbt())) {
+				continue;
+			}
+			BlockPos p = info.pos();
+			out.add(new BlueprintStructureData.PositionedBlock(p.getX(), p.getY(), p.getZ(), info.state()));
+		}
+		return new BlueprintStructureData(size.getX(), size.getY(), size.getZ(), out);
 	}
 
 	private static CompoundTag readTagFromBytes(byte[] rawBytes, String sourceLabel) throws IOException {

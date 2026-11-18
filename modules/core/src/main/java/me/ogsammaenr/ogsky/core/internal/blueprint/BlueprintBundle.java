@@ -12,10 +12,11 @@ import org.jspecify.annotations.Nullable;
 
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Validated in-memory descriptor for a per-island {@code .nbt} blueprint bundle.
- * Stores eagerly loaded, GZIP-compressed {@link CompressedBlueprint} payloads directly in RAM.
+ * Stores eagerly loaded, GZIP-compressed {@link CompressedBlueprint} payloads and optional PNG preview bytes directly in RAM.
  */
 public record BlueprintBundle(
 	String id,
@@ -23,12 +24,27 @@ public record BlueprintBundle(
 	BlueprintBundleMetadata metadata,
 	@Nullable CompressedBlueprint overworld,
 	@Nullable CompressedBlueprint nether,
-	@Nullable CompressedBlueprint end
+	@Nullable CompressedBlueprint end,
+	byte @Nullable [] previewPng
 ) {
+	public BlueprintBundle(
+		String id,
+		Path directory,
+		BlueprintBundleMetadata metadata,
+		@Nullable CompressedBlueprint overworld,
+		@Nullable CompressedBlueprint nether,
+		@Nullable CompressedBlueprint end
+	) {
+		this(id, directory, metadata, overworld, nether, end, null);
+	}
+
 	public BlueprintBundle {
 		Objects.requireNonNull(id, "id");
 		Objects.requireNonNull(directory, "directory");
 		Objects.requireNonNull(metadata, "metadata");
+		if (previewPng != null) {
+			previewPng = previewPng.length == 0 ? null : previewPng.clone();
+		}
 	}
 
 	public boolean hasOverworld() {
@@ -43,6 +59,17 @@ public record BlueprintBundle(
 		return end != null;
 	}
 
+	public boolean hasPreviewImage() {
+		return previewPng != null && previewPng.length > 0;
+	}
+
+	public Optional<byte[]> findPreviewPngBytes() {
+		if (!hasPreviewImage()) {
+			return Optional.empty();
+		}
+		return Optional.of(previewPng.clone());
+	}
+
 	public BlueprintBundleView toView() {
 		return new BlueprintBundleView(
 			id,
@@ -54,7 +81,8 @@ public record BlueprintBundle(
 			metadata.order,
 			hasOverworld(),
 			hasNether(),
-			hasEnd()
+			hasEnd(),
+			hasPreviewImage()
 		);
 	}
 

@@ -16,6 +16,7 @@ import me.ogsammaenr.ogsky.core.api.island.IslandView;
 import me.ogsammaenr.ogsky.core.api.mutation.WorldMutationService;
 import me.ogsammaenr.ogsky.core.api.scan.IslandScanService;
 import me.ogsammaenr.ogsky.core.api.service.ServiceRegistry;
+import me.ogsammaenr.ogsky.core.api.event.BlueprintsReloadedEvent;
 import me.ogsammaenr.ogsky.core.api.event.IslandDeletedEvent;
 import me.ogsammaenr.ogsky.core.api.event.IslandResetEvent;
 import me.ogsammaenr.ogsky.core.internal.action.SimpleIslandActionRegistry;
@@ -248,6 +249,10 @@ public final class OgskyCoreApiImpl implements OgskyCoreApi {
 			config.copyRuntimeFrom(fresh);
 		}
 		blueprintService.registry().reload(server != null ? server.getFixerUpper() : null);
+		eventBus.publish(new BlueprintsReloadedEvent(
+			blueprintService.registry().revision(),
+			blueprintService.registry().listAll().size()
+		));
 	}
 
 	public void freezeRegistries() {

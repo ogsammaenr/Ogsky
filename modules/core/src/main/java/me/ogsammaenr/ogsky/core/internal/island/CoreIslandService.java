@@ -1,6 +1,9 @@
 package me.ogsammaenr.ogsky.core.internal.island;
 
+import me.ogsammaenr.ogsky.core.api.OgskyCore;
 import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintBundleView;
+import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintDimension;
+import me.ogsammaenr.ogsky.core.api.blueprint.BlueprintStructureData;
 import me.ogsammaenr.ogsky.core.api.db.DatabaseService;
 import me.ogsammaenr.ogsky.core.api.db.ModuleDatabase;
 import me.ogsammaenr.ogsky.core.api.flag.FlagType;
@@ -9,11 +12,13 @@ import me.ogsammaenr.ogsky.core.api.island.IslandOperationResult;
 import me.ogsammaenr.ogsky.core.api.island.IslandService;
 import me.ogsammaenr.ogsky.core.api.island.IslandView;
 import me.ogsammaenr.ogsky.core.internal.blueprint.BlueprintBundle;
+import me.ogsammaenr.ogsky.core.internal.blueprint.CompressedBlueprint;
 import me.ogsammaenr.ogsky.core.internal.blueprint.CoreBlueprintService;
 import me.ogsammaenr.ogsky.core.internal.config.CoreConfig;
 import me.ogsammaenr.ogsky.core.internal.flag.SimpleFlagRegistry;
 import me.ogsammaenr.ogsky.core.internal.protection.ProtectionResolver;
 import me.ogsammaenr.ogsky.core.internal.world.OgskyDimensions;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
@@ -22,6 +27,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import org.jspecify.annotations.Nullable;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -216,6 +222,46 @@ public final class CoreIslandService implements IslandService {
 		return blueprintService.registry().listAll().stream()
 			.map(BlueprintBundle::toView)
 			.toList();
+	}
+
+	@Override
+	public long blueprintRevision() {
+		return blueprintService != null ? blueprintService.registry().revision() : 0L;
+	}
+
+	@Override
+	public Optional<byte[]> findBlueprintPreviewPng(String bundleId) {
+		if (blueprintService == null || bundleId == null || bundleId.isBlank()) {
+			return Optional.empty();
+		}
+		return blueprintService.registry().find(bundleId)
+			.flatMap(BlueprintBundle::findPreviewPngBytes);
+	}
+
+	@Override
+	public Optional<BlueprintStructureData> readBlueprintStructure(String bundleId, BlueprintDimension dimension) {
+		if (blueprintService == null || bundleId == null || bundleId.isBlank() || dimension == null) {
+			return Optional.empty();
+		}
+		Optional<BlueprintBundle> maybeBundle = blueprintService.registry().find(bundleId);
+		if (maybeBundle.isEmpty()) {
+			return Optional.empty();
+		}
+		CompressedBlueprint compressed = maybeBundle.get().blueprintFor(dimension.dimensionKey());
+		if (compressed == null) {
+			return Optional.empty();
+		}
+		try {
+			return Optional.of(compressed.extractStructureData(BuiltInRegistries.BLOCK));
+		} catch (IOException ex) {
+			OgskyCore.LOGGER.warn(
+				"Failed to decode structure preview for blueprint '{}' ({}): {}",
+				bundleId,
+				dimension.key(),
+				ex.getMessage()
+			);
+			return Optional.empty();
+		}
 	}
 
 	@Override
