@@ -124,10 +124,27 @@ public final class PanelGameTests {
 						&& owner.getInventory().getItem(0).getCount() == 3, "Expected player hotbar diamond untouched");
 					helper.assertTrue(owner.getOffhandItem().is(Items.SHIELD), "Expected offhand shield untouched");
 
-					// Step 3: Click Panel Test blueprint to create island for islandless player
+					// Step 3: Click Panel Test blueprint -> opens 3D Preview Detail screen -> 2-click Create Island confirm
 					menu.clicked(testBpSlot, 0, ContainerInput.PICKUP, owner);
+					helper.assertTrue(
+						islands.grid().findPrimaryIsland(ownerId).isEmpty() && owner.containerMenu instanceof ChestMenu,
+						"Expected blueprint card click to open blueprint preview ChestMenu before creating"
+					);
+					ChestMenu createPreviewMenu = (ChestMenu) owner.containerMenu;
+					int createConfirmSlot = GameTestSupport.findContainerSlotByName(createPreviewMenu, "Create Island");
+					helper.assertTrue(createConfirmSlot >= 0, "Expected Create Island action slot inside preview menu");
+					createPreviewMenu.clicked(createConfirmSlot, 0, ContainerInput.PICKUP, owner);
+					helper.assertTrue(
+						islands.grid().findPrimaryIsland(ownerId).isEmpty(),
+						"First click on Create Island must require confirmation"
+					);
+					helper.assertTrue(
+						Boolean.TRUE.equals(createPreviewMenu.getSlot(createConfirmSlot).getItem().get(DataComponents.ENCHANTMENT_GLINT_OVERRIDE)),
+						"Pending create confirmation must highlight with glint"
+					);
+					createPreviewMenu.clicked(createConfirmSlot, 0, ContainerInput.PICKUP, owner);
 					Island created = islands.grid().findPrimaryIsland(ownerId).orElse(null);
-					helper.assertTrue(created != null, "Expected blueprint click to create island");
+					helper.assertTrue(created != null, "Expected second click on Create Island to create island");
 					createdIslandId.set(created.islandId());
 					helper.assertTrue("panel_test".equals(created.bundleId()), "Expected created island to use panel_test bundle");
 					helper.assertTrue(!(owner.containerMenu instanceof ChestMenu), "Expected menu to close after creation");
@@ -234,17 +251,25 @@ public final class PanelGameTests {
 						"Expected OgskyEventBus live refresh to update Island Lock item glint on open ChestMenu"
 					);
 
-					// Step 5: 2-step reset confirmation on Blueprints & Info tab (slot 4)
+					// Step 5: Blueprints & Info tab -> open Panel Alt preview -> 2-step reset confirmation
 					menu.clicked(4, 0, ContainerInput.PICKUP, owner);
 					int altBpSlot = GameTestSupport.findContentSlotByName(menu, "Panel Alt");
 					helper.assertTrue(altBpSlot >= 0, "Expected Panel Alt blueprint on Blueprints & Info tab");
 					menu.clicked(altBpSlot, 0, ContainerInput.PICKUP, owner);
+					helper.assertTrue(
+						"panel_test".equals(created.bundleId()) && owner.containerMenu instanceof ChestMenu,
+						"Clicking blueprint card must open 3D preview menu first"
+					);
+					ChestMenu resetPreviewMenu = (ChestMenu) owner.containerMenu;
+					int resetConfirmSlot = GameTestSupport.findContainerSlotByName(resetPreviewMenu, "Reset Island");
+					helper.assertTrue(resetConfirmSlot >= 0, "Expected Reset Island action slot inside preview menu");
+					resetPreviewMenu.clicked(resetConfirmSlot, 0, ContainerInput.PICKUP, owner);
 					helper.assertTrue("panel_test".equals(created.bundleId()), "First reset click must require confirmation");
 					helper.assertTrue(
-						Boolean.TRUE.equals(menu.getSlot(altBpSlot).getItem().get(DataComponents.ENCHANTMENT_GLINT_OVERRIDE)),
+						Boolean.TRUE.equals(resetPreviewMenu.getSlot(resetConfirmSlot).getItem().get(DataComponents.ENCHANTMENT_GLINT_OVERRIDE)),
 						"Pending reset target should highlight with glint"
 					);
-					menu.clicked(altBpSlot, 0, ContainerInput.PICKUP, owner);
+					resetPreviewMenu.clicked(resetConfirmSlot, 0, ContainerInput.PICKUP, owner);
 					helper.assertTrue("panel_alt".equals(created.bundleId()), "Second click within TTL must reset island to panel_alt");
 					for (int t = 0; t < 20 && created.isPasting(); t++) {
 						coreApi.blueprints().tick(server);
@@ -313,12 +338,12 @@ public final class PanelGameTests {
 					EmbeddedChannel survCh = survivalChannelRef.get();
 					EmbeddedChannel creaCh = creativeChannelRef.get();
 
-					// Every panel slot icon must carry the hidden panel item marker
+					// Every panel slot icon must carry the hidden Ogui item marker
 					ItemStack iconCopy = creaMenu.getSlot(4).getItem().copy();
 					CustomData marker = iconCopy.get(DataComponents.CUSTOM_DATA);
 					helper.assertTrue(
-						marker != null && marker.copyTag().getBooleanOr("ogsky_panel_item", false),
-						"Expected panel icon stack to carry internal ogsky_panel_item marker"
+						marker != null && marker.copyTag().getBooleanOr("ogui_item", false),
+						"Expected panel icon stack to carry internal ogui_item marker"
 					);
 
 					// 1. Survival: simulate pressing 'F' (ContainerInput.SWAP, button 40) on panel slot 4 and slot 45
@@ -454,5 +479,23 @@ public final class PanelGameTests {
 				}))
 				.thenSucceed();
 		});
+	}
+
+	@GameTest
+	public void panelHybridClientProtocolAndVanillaFakeSignSearchWork(GameTestHelper helper) {
+		if (!FabricLoader.getInstance().isModLoaded("ogsky-panel")) {
+			helper.succeed();
+			return;
+		}
+		OguiPanelGameTestBridge.runHybridAndFakeSignTest(helper);
+	}
+
+	@GameTest
+	public void blueprintGallery3dPreviewAndResetMenuWork(GameTestHelper helper) {
+		if (!FabricLoader.getInstance().isModLoaded("ogsky-panel")) {
+			helper.succeed();
+			return;
+		}
+		OguiPanelGameTestBridge.runBlueprintGalleryAnd3DPreviewTest(helper);
 	}
 }

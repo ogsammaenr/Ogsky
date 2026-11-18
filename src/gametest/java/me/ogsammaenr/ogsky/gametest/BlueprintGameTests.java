@@ -256,7 +256,13 @@ public final class BlueprintGameTests {
 			helper.assertTrue(overworld.getBlockEntity(chestPos) == null, "Expected chest BlockEntity removed cleanly");
 			helper.assertTrue(nether.getBlockState(new BlockPos(centerX, spawnY - 1, centerZ)).isAir(), "Expected nether blocks cleared cleanly");
 			helper.assertTrue(end.getBlockState(new BlockPos(centerX, spawnY - 1, centerZ)).isAir(), "Expected end blocks cleared cleanly");
-			helper.assertTrue(!stray.isAlive(), "Expected non-player entity discarded during island chunk cleanup");
+			helper.assertTrue(
+				!stray.isAlive(),
+				"Expected non-player entity discarded during island chunk cleanup (cell=" + gridX + "," + gridZ
+					+ " center=" + centerX + "," + centerZ
+					+ " entitiesLoaded=" + overworld.areEntitiesLoaded(net.minecraft.world.level.ChunkPos.pack(centerX >> 4, centerZ >> 4))
+					+ " entityTicking=" + overworld.isPositionEntityTicking(stray.blockPosition()) + ")"
+			);
 			helper.assertTrue(
 				overworld.getEntitiesOfClass(
 					net.minecraft.world.entity.Entity.class,

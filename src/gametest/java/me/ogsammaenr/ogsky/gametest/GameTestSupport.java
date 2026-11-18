@@ -32,6 +32,8 @@ import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate;
 import net.minecraft.world.phys.AABB;
 
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -40,6 +42,8 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
+import java.util.zip.CRC32;
+import java.util.zip.Deflater;
 
 /**
  * Shared mock-player, blueprint synthesis, cleanup, and packet inspection helpers for headless Ogsky GameTests.
@@ -97,6 +101,79 @@ final class GameTestSupport {
 			}
 		}
 		return -1;
+	}
+
+	static int findContainerSlotByName(ChestMenu menu, String expectedName) {
+		int containerSlots = Math.max(0, menu.slots.size() - 36);
+		for (int slot = 0; slot < containerSlots; slot++) {
+			ItemStack stack = menu.getSlot(slot).getItem();
+			if (stack.isEmpty()) {
+				continue;
+			}
+			var customName = stack.get(DataComponents.CUSTOM_NAME);
+			if (customName != null && expectedName.equals(customName.getString())) {
+				return slot;
+			}
+		}
+		return -1;
+	}
+
+	static byte[] createTestPng(int rgba) throws Exception {
+		int w = 4;
+		int h = 4;
+		ByteArrayOutputStream rawRows = new ByteArrayOutputStream();
+		byte r = (byte) ((rgba >> 16) & 0xFF);
+		byte g = (byte) ((rgba >> 8) & 0xFF);
+		byte b = (byte) (rgba & 0xFF);
+		byte a = (byte) ((rgba >> 24) & 0xFF);
+		for (int y = 0; y < h; y++) {
+			rawRows.write(0); // filter type 0
+			for (int x = 0; x < w; x++) {
+				rawRows.write(r);
+				rawRows.write(g);
+				rawRows.write(b);
+				rawRows.write(a);
+			}
+		}
+		byte[] uncompressed = rawRows.toByteArray();
+		Deflater deflater = new Deflater();
+		deflater.setInput(uncompressed);
+		deflater.finish();
+		ByteArrayOutputStream compressed = new ByteArrayOutputStream();
+		byte[] buf = new byte[256];
+		while (!deflater.finished()) {
+			int n = deflater.deflate(buf);
+			compressed.write(buf, 0, n);
+		}
+		deflater.end();
+
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		out.write(new byte[] { (byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
+		ByteArrayOutputStream ihdr = new ByteArrayOutputStream();
+		DataOutputStream ihdrDos = new DataOutputStream(ihdr);
+		ihdrDos.writeInt(w);
+		ihdrDos.writeInt(h);
+		ihdrDos.writeByte(8); // bit depth
+		ihdrDos.writeByte(6); // RGBA
+		ihdrDos.writeByte(0);
+		ihdrDos.writeByte(0);
+		ihdrDos.writeByte(0);
+		writePngChunk(out, "IHDR", ihdr.toByteArray());
+		writePngChunk(out, "IDAT", compressed.toByteArray());
+		writePngChunk(out, "IEND", new byte[0]);
+		return out.toByteArray();
+	}
+
+	private static void writePngChunk(ByteArrayOutputStream out, String type, byte[] data) throws Exception {
+		DataOutputStream dos = new DataOutputStream(out);
+		dos.writeInt(data.length);
+		byte[] typeBytes = type.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+		dos.write(typeBytes);
+		dos.write(data);
+		CRC32 crc = new CRC32();
+		crc.update(typeBytes);
+		crc.update(data);
+		dos.writeInt((int) crc.getValue());
 	}
 
 	static void synthesizeSimpleBlueprintBundle(

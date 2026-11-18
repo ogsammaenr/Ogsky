@@ -20,8 +20,10 @@ import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.decoration.ArmorStand;
+import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.EndPortalBlock;
 import net.minecraft.world.level.block.NetherPortalBlock;
@@ -304,6 +306,61 @@ public final class CoreBootstrapGameTests {
 			GameTestSupport.clearLoadedBounds(server, island.minX(), island.maxX(), island.minZ(), island.maxZ());
 			GameTestSupport.cleanupTestIsland(coreApi, islands, island.islandId(), gridX, gridZ);
 		}
+
+		helper.succeed();
+	}
+
+	@GameTest
+	public void coreCreateAndResetWithoutPanelFallbackCleanly(GameTestHelper helper) throws Exception {
+		if (FabricLoader.getInstance().isModLoaded("ogsky-panel")) {
+			helper.succeed();
+			return;
+		}
+
+		MinecraftServer server = helper.getLevel().getServer();
+		ServerLevel overworld = server.getLevel(OgskyDimensions.OVERWORLD);
+		helper.assertTrue(overworld != null, "Expected ogsky:overworld dimension");
+
+		OgskyCoreApiImpl coreApi = (OgskyCoreApiImpl) OgskyCore.api();
+		CoreIslandService islands = coreApi.coreIslands();
+		String defaultBundleId = coreApi.islands().defaultBlueprintId();
+		java.nio.file.Path defaultBundleDir = coreApi.blueprints().registry().blueprintsDir().resolve(defaultBundleId);
+
+		UUID ownerId = UUID.randomUUID();
+		ServerPlayer player = GameTestSupport.createOnlineMockPlayer(server, overworld, ownerId, "CoreOnlyPlayer", GameType.SURVIVAL);
+		java.util.concurrent.atomic.AtomicReference<UUID> islandRef = new java.util.concurrent.atomic.AtomicReference<>();
+		Runnable cleanup = () -> {
+			GameTestSupport.deleteAndCleanupIsland(server, coreApi, islands, islandRef.get(), ownerId);
+			GameTestSupport.deleteDirectoryRecursively(defaultBundleDir);
+			coreApi.reloadConfigAndBlueprints(server);
+			server.getPlayerList().remove(player);
+		};
+
+		GameTestSupport.runWithCleanup(cleanup, () -> {
+			GameTestSupport.synthesizeSimpleBlueprintBundle(overworld, defaultBundleDir, defaultBundleId, "Core Default", 0);
+			coreApi.reloadConfigAndBlueprints(server);
+
+			server.getCommands().performPrefixedCommand(player.createCommandSourceStack(), "is create");
+			Island created = islands.grid().findPrimaryIsland(ownerId).orElse(null);
+			helper.assertTrue(created != null, "Expected argless /is create to create island directly in core-only mode");
+			islandRef.set(created.islandId());
+			for (int t = 0; t < 20 && created.isPasting(); t++) {
+				coreApi.blueprints().tick(server);
+			}
+
+			BlockPos checkPos = new BlockPos(created.centerX(), 64, created.centerZ());
+			helper.assertTrue(overworld.getBlockState(checkPos).is(Blocks.STONE),
+				"Expected core-only /is create to paste default bundle block");
+			overworld.setBlock(checkPos, Blocks.AIR.defaultBlockState(), 18);
+
+			server.getCommands().performPrefixedCommand(player.createCommandSourceStack(), "is reset");
+			for (int t = 0; t < 40 && created.isPasting(); t++) {
+				coreApi.blueprints().tick(server);
+			}
+			helper.assertTrue(overworld.getBlockState(checkPos).is(Blocks.STONE),
+				"Expected argless /is reset to fall back cleanly and re-paste default bundle in core-only mode");
+			cleanup.run();
+		});
 
 		helper.succeed();
 	}
