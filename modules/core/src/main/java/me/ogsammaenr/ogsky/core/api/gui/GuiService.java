@@ -16,6 +16,17 @@ import java.util.UUID;
  */
 public interface GuiService {
 	Identifier MAIN_PANEL_SCREEN_ID = OgskyCore.id("main_panel");
+	Identifier CREATE_GALLERY_SCREEN_ID = OgskyCore.id("island_create");
+	Identifier BLUEPRINT_PREVIEW_SCREEN_ID = OgskyCore.id("blueprint_preview");
+
+	/**
+	 * @return {@code true} if {@code screenId} is one of the core/panel built-in host screens rather than an extension screen.
+	 */
+	static boolean isBuiltInScreen(Identifier screenId) {
+		return MAIN_PANEL_SCREEN_ID.equals(screenId)
+			|| CREATE_GALLERY_SCREEN_ID.equals(screenId)
+			|| BLUEPRINT_PREVIEW_SCREEN_ID.equals(screenId);
+	}
 
 	/**
 	 * @return {@code true} when an active {@link GuiHost} (e.g., {@code ogsky-panel}) is available to render menus.

@@ -99,7 +99,7 @@ public final class SimpleGuiService implements GuiService {
 		if (host == null) {
 			return false;
 		}
-		if (!MAIN_PANEL_SCREEN_ID.equals(request.screenId()) && !screens.containsKey(request.screenId())) {
+		if (!GuiService.isBuiltInScreen(request.screenId()) && !screens.containsKey(request.screenId())) {
 			return false;
 		}
 		return host.openScreen(player, request);

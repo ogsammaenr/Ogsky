@@ -17,6 +17,8 @@ import me.ogsammaenr.ogsky.core.api.event.IslandPreDeleteEvent;
 import me.ogsammaenr.ogsky.core.api.flag.FlagRegistry;
 import me.ogsammaenr.ogsky.core.api.flag.FlagType;
 import me.ogsammaenr.ogsky.core.api.flag.IslandFlagDefinition;
+import me.ogsammaenr.ogsky.core.api.gui.GuiOpenRequest;
+import me.ogsammaenr.ogsky.core.api.gui.GuiService;
 import me.ogsammaenr.ogsky.core.api.island.IslandRole;
 import me.ogsammaenr.ogsky.core.api.island.IslandView;
 import me.ogsammaenr.ogsky.core.internal.blueprint.BlueprintBundle;
@@ -71,6 +73,7 @@ public final class OgskyCommands implements IslandCommandHelper {
 	private final IslandCommandRegistry commandRegistry;
 	private final LuckPermsPermissionBridge permissionBridge;
 	private final ProtectionResolver protection;
+	private final @Nullable GuiService guiService;
 	private final Consumer<MinecraftServer> reloadAction;
 	private final Map<UUID, Instant> pendingDeleteConfirmations = new ConcurrentHashMap<>();
 
@@ -85,6 +88,32 @@ public final class OgskyCommands implements IslandCommandHelper {
 		ProtectionResolver protection,
 		Consumer<MinecraftServer> reloadAction
 	) {
+		this(
+			islandService,
+			lifecycleService,
+			teamService,
+			blueprintService,
+			flagRegistry,
+			commandRegistry,
+			permissionBridge,
+			protection,
+			null,
+			reloadAction
+		);
+	}
+
+	public OgskyCommands(
+		CoreIslandService islandService,
+		IslandLifecycleService lifecycleService,
+		TeamService teamService,
+		CoreBlueprintService blueprintService,
+		FlagRegistry flagRegistry,
+		IslandCommandRegistry commandRegistry,
+		LuckPermsPermissionBridge permissionBridge,
+		ProtectionResolver protection,
+		@Nullable GuiService guiService,
+		Consumer<MinecraftServer> reloadAction
+	) {
 		this.islandService = Objects.requireNonNull(islandService, "islandService");
 		this.lifecycleService = Objects.requireNonNull(lifecycleService, "lifecycleService");
 		this.teamService = Objects.requireNonNull(teamService, "teamService");
@@ -93,6 +122,7 @@ public final class OgskyCommands implements IslandCommandHelper {
 		this.commandRegistry = Objects.requireNonNull(commandRegistry, "commandRegistry");
 		this.permissionBridge = Objects.requireNonNull(permissionBridge, "permissionBridge");
 		this.protection = Objects.requireNonNull(protection, "protection");
+		this.guiService = guiService;
 		this.reloadAction = Objects.requireNonNull(reloadAction, "reloadAction");
 	}
 
@@ -402,6 +432,19 @@ public final class OgskyCommands implements IslandCommandHelper {
 		if (player == null) {
 			return 0;
 		}
+		if (requestedBundle == null || requestedBundle.isBlank()) {
+			if (islandService.grid().findPrimaryIsland(player.getUUID()).isPresent()) {
+				sendFailure(ctx.getSource(), "You already belong to a primary Skyblock island.");
+				return 0;
+			}
+			if (guiService != null && guiService.isAvailable()) {
+				GuiOpenRequest request = GuiOpenRequest.of(GuiService.CREATE_GALLERY_SCREEN_ID, null)
+					.withState("mode", "create");
+				if (guiService.openScreen(player, request)) {
+					return Command.SINGLE_SUCCESS;
+				}
+			}
+		}
 		String resolvedBundleId = (requestedBundle == null || requestedBundle.isBlank())
 			? blueprintService.registry().defaultBundleId()
 			: requestedBundle;
@@ -423,6 +466,23 @@ public final class OgskyCommands implements IslandCommandHelper {
 		Island island = requirePrimaryIsland(ctx.getSource(), player.getUUID());
 		if (island == null) {
 			return 0;
+		}
+		if (requestedBundle == null || requestedBundle.isBlank()) {
+			if (!island.ownerId().equals(player.getUUID())) {
+				sendFailure(ctx.getSource(), "Only the island owner can reset this island.");
+				return 0;
+			}
+			if (island.isPasting() || island.isDeleting()) {
+				sendFailure(ctx.getSource(), "Island is already processing a paste or cleanup operation.");
+				return 0;
+			}
+			if (guiService != null && guiService.isAvailable()) {
+				GuiOpenRequest request = GuiOpenRequest.of(GuiService.CREATE_GALLERY_SCREEN_ID, island.islandId())
+					.withState("mode", "reset");
+				if (guiService.openScreen(player, request)) {
+					return Command.SINGLE_SUCCESS;
+				}
+			}
 		}
 		String resolvedBundleId = (requestedBundle == null || requestedBundle.isBlank())
 			? blueprintService.registry().defaultBundleId()

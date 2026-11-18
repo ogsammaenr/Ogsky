@@ -71,6 +71,7 @@ public final class OgskyCoreMod implements ModInitializer {
 			api.commands(),
 			api.permissions(),
 			api.protection(),
+			api.guis(),
 			api::reloadConfigAndBlueprints
 		);
 		commands.registerCallbacks();
